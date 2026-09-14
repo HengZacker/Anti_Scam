@@ -737,18 +737,6 @@ async def document_handler(
 
 def register_handlers(application):
     # --------------------------------------------------------
-    # Track normal group activity
-    # --------------------------------------------------------
-
-    application.add_handler(
-        MessageHandler(
-            filters.ChatType.GROUPS & ~filters.COMMAND,
-            track_group_activity,
-        ),
-        group=0,
-    )
-
-    # --------------------------------------------------------
     # Block suspicious documents
     # --------------------------------------------------------
 
@@ -756,8 +744,7 @@ def register_handlers(application):
         MessageHandler(
             filters.Document.ALL & ~filters.COMMAND,
             document_handler,
-        ),
-        group=1,
+        )
     )
 
     # --------------------------------------------------------
@@ -765,45 +752,27 @@ def register_handlers(application):
     # --------------------------------------------------------
 
     application.add_handler(
-        CommandHandler(
-            "start",
-            start_command,
-        )
+        CommandHandler("start", start_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "help",
-            help_command,
-        )
+        CommandHandler("help", help_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "id",
-            id_command,
-        )
+        CommandHandler("id", id_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "stats",
-            stats_command,
-        )
+        CommandHandler("stats", stats_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "groups",
-            groups_command,
-        )
+        CommandHandler("groups", groups_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "clearstats",
-            clear_stats_command,
-        )
+        CommandHandler("clearstats", clear_stats_command)
     )
 
     logger.info(
