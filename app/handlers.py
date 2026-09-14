@@ -703,12 +703,20 @@ async def document_handler(
             reason="Blocked file extension",
             deleted_successfully=deleted,
         )
-
+        logger.info(
+            "Deletion event recorded successfully | "
+            "File: %s | Group: %s | Deleted: %s",
+            filename,
+            group_title,
+            deleted,
+        )
     except Exception:
         logger.exception(
-            "Failed to record deletion event."
+            "FAILED to record deletion event | "
+            "File: %s | Group: %s",
+            filename,
+            group_title,
         )
-
     # --------------------------------------------------------
     # ADMIN ALERT
     # --------------------------------------------------------
