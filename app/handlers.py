@@ -580,22 +580,16 @@ async def help_command(
 # ============================================================
 # DOCUMENT HANDLER
 # ============================================================
-
-async def document_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     chat = update.effective_chat
+    user = update.effective_user
 
     if not message or not chat:
         return
 
-    # Only process files in groups/supergroups
-    if chat.type not in {
-        ChatType.GROUP,
-        ChatType.SUPERGROUP,
-    }:
+    # Only monitor groups
+    if chat.type not in {"group", "supergroup"}:
         return
 
     filename = get_filename(update)
@@ -603,7 +597,7 @@ async def document_handler(
     if not filename:
         return
 
-    # Check whether the filename is blocked
+    # Check blocked extension
     if not is_blocked_filename(
         filename,
         settings.blocked_extensions,
@@ -612,64 +606,48 @@ async def document_handler(
 
     extension = get_extension(filename)
 
-    user = update.effective_user
-
-    if user:
-        username = (
-            f"@{user.username}"
-            if user.username
-            else user.first_name or "Unknown"
-        )
-        user_id = user.id
-    else:
-        username = "Unknown"
-        user_id = None
-
     group_title = chat.title or "Unknown Group"
     group_username = chat.username
 
-    # --------------------------------------------------------
-    # TRACK GROUP
-    # --------------------------------------------------------
+    user_id = user.id if user else None
 
+    database = get_database(context)
+
+    # Track the group
     try:
-        database = get_database(context)
-
         await database.upsert_group(
             chat_id=chat.id,
             title=group_title,
             username=group_username,
             chat_type=chat.type,
         )
-
     except Exception:
         logger.exception(
-            "Failed to update group tracking."
+            "Failed to update group information: %s",
+            group_title,
         )
 
-    # --------------------------------------------------------
-    # DELETE FILE
-    # --------------------------------------------------------
-
+    # Delete the blocked file
     deleted = False
 
     if settings.delete_enabled:
         try:
             await message.delete()
-
             deleted = True
 
             logger.warning(
-                "Deleted blocked file: %s | Group: %s | ID: %s",
+                "DELETED BLOCKED FILE | "
+                "File=%s | Extension=%s | Group=%s | ChatID=%s",
                 filename,
+                extension,
                 group_title,
                 chat.id,
             )
 
         except Exception:
             logger.exception(
-                "FAILED TO DELETE blocked file: %s | "
-                "Group: %s | ID: %s",
+                "FAILED TO DELETE BLOCKED FILE | "
+                "File=%s | Group=%s | ChatID=%s",
                 filename,
                 group_title,
                 chat.id,
@@ -677,18 +655,13 @@ async def document_handler(
 
     else:
         logger.warning(
-            "DELETE_ENABLED is FALSE. "
-            "Blocked file was NOT deleted: %s",
+            "DELETE_ENABLED is FALSE | File=%s",
             filename,
         )
 
-    # --------------------------------------------------------
-    # RECORD DATABASE EVENT
-    # --------------------------------------------------------
-
+    # IMPORTANT:
+    # Record the deletion event AFTER attempting deletion.
     try:
-        database = get_database(context)
-
         await database.record_deletion(
             message_id=message.message_id,
             chat_id=chat.id,
@@ -703,34 +676,33 @@ async def document_handler(
             reason="Blocked file extension",
             deleted_successfully=deleted,
         )
+
         logger.info(
-            "Deletion event recorded successfully | "
-            "File: %s | Group: %s | Deleted: %s",
+            "STAT RECORDED SUCCESSFULLY | "
+            "File=%s | Extension=%s | Group=%s | Deleted=%s",
             filename,
+            extension,
             group_title,
             deleted,
         )
+
     except Exception:
         logger.exception(
-            "FAILED to record deletion event | "
-            "File: %s | Group: %s",
+            "STAT RECORDING FAILED | "
+            "File=%s | Group=%s",
             filename,
             group_title,
         )
-    # --------------------------------------------------------
-    # ADMIN ALERT
-    # --------------------------------------------------------
 
-    if settings.alert_admins:
+    # Notify admins
+    if deleted:
         await send_admin_alert(
             context,
             filename=filename,
             extension=extension,
             group_title=group_title,
-            group_id=chat.id,
-            username=username,
-            user_id=user_id,
-            deleted=deleted,
+            group_username=group_username,
+            user=user,
         )
 # ============================================================
 # REGISTER HANDLERS
