@@ -58,8 +58,43 @@ def get_database(context: ContextTypes.DEFAULT_TYPE) -> Database:
 
 
 # ============================================================
+# DEBUG UPDATE HANDLER
+# ============================================================
+
+async def debug_update_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """
+    Debug handler used to confirm that Telegram updates
+    are reaching the python-telegram-bot dispatcher.
+    """
+
+    message = update.effective_message
+
+    logger.warning(
+        "🔎 UPDATE DEBUG | "
+        "update_id=%s | "
+        "message=%s | "
+        "document=%s | "
+        "chat=%s | "
+        "chat_type=%s",
+        update.update_id,
+        bool(message),
+        bool(message and message.document),
+        update.effective_chat.id
+        if update.effective_chat
+        else None,
+        update.effective_chat.type
+        if update.effective_chat
+        else None,
+    )
+
+
+# ============================================================
 # ADMIN ALERT
 # ============================================================
+
 async def send_admin_alert(
     context: ContextTypes.DEFAULT_TYPE,
     *,
@@ -77,13 +112,15 @@ async def send_admin_alert(
 
     if not settings.alert_admins:
         logger.warning(
-            "Admin alerts are disabled because ALERT_ADMINS is false."
+            "Admin alerts are disabled because "
+            "ALERT_ADMINS is false."
         )
         return
 
     if not settings.admin_ids:
         logger.error(
-            "ADMIN_IDS is empty. Cannot send admin security alert."
+            "ADMIN_IDS is empty. "
+            "Cannot send admin security alert."
         )
         return
 
@@ -96,14 +133,18 @@ async def send_admin_alert(
     text = (
         "🛡️ <b>Telegram File Guard Alert</b>\n\n"
         f"<b>Status:</b> {status}\n"
-        f"<b>File:</b> <code>{escape(filename)}</code>\n"
-        f"<b>Extension:</b> <code>{escape(extension)}</code>\n\n"
+        f"<b>File:</b> "
+        f"<code>{escape(filename)}</code>\n"
+        f"<b>Extension:</b> "
+        f"<code>{escape(extension)}</code>\n\n"
         f"<b>Group:</b> {escape(group_title)}\n"
-        f"<b>Group ID:</b> <code>{group_id}</code>\n\n"
+        f"<b>Group ID:</b> "
+        f"<code>{group_id}</code>\n\n"
         f"<b>User:</b> {escape(username)}\n"
         f"<b>User ID:</b> "
         f"<code>{user_id if user_id else 'Unknown'}</code>\n\n"
-        "⚠️ This file type is blocked by the security policy."
+        "⚠️ This file type is blocked "
+        "by the security policy."
     )
 
     for admin_id in settings.admin_ids:
@@ -133,10 +174,11 @@ async def send_admin_alert(
 
         except Exception:
             logger.exception(
-                "Unexpected error while sending security alert "
-                "to admin %s",
+                "Unexpected error while sending "
+                "security alert to admin %s",
                 admin_id,
             )
+
 
 # ============================================================
 # GROUP TRACKING
@@ -147,8 +189,8 @@ async def track_group_activity(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     """
-    Automatically register/update groups where the bot receives
-    messages.
+    Automatically register/update groups where the bot
+    receives messages.
     """
 
     chat = update.effective_chat
@@ -267,13 +309,20 @@ async def stats_command(
 ):
     if not is_admin(update):
         await update.effective_message.reply_text(
-            "⛔ This command is only available to the bot admin."
+            "⛔ This command is only available "
+            "to the bot admin."
         )
         return
 
     try:
         database = get_database(context)
+
         stats = await database.get_stats()
+
+        logger.info(
+            "STATISTICS COMMAND | %s",
+            stats,
+        )
 
         text = (
             "📊 <b>Telegram File Guard Statistics</b>\n\n"
@@ -297,7 +346,9 @@ async def stats_command(
         )
 
     except Exception:
-        logger.exception("Failed to get statistics.")
+        logger.exception(
+            "Failed to get statistics."
+        )
 
         await update.effective_message.reply_text(
             "❌ Failed to retrieve statistics."
@@ -314,13 +365,13 @@ async def groups_command(
 ):
     """
     Show all groups where the bot is currently active.
-
     Admin only.
     """
 
     if not is_admin(update):
         await update.effective_message.reply_text(
-            "⛔ This command is only available to the bot admin."
+            "⛔ This command is only available "
+            "to the bot admin."
         )
         return
 
@@ -340,7 +391,6 @@ async def groups_command(
         active_groups = []
         removed_groups = 0
 
-        # Get the bot's own Telegram account
         bot_user = await context.bot.get_me()
 
         for group in groups:
@@ -352,7 +402,6 @@ async def groups_command(
                     user_id=bot_user.id,
                 )
 
-                # Bot is no longer inside the group
                 if member.status in {
                     ChatMemberStatus.LEFT,
                     ChatMemberStatus.BANNED,
@@ -362,8 +411,8 @@ async def groups_command(
                     removed_groups += 1
 
                     logger.info(
-                        "Removed inactive group from database: "
-                        "%s (%s)",
+                        "Removed inactive group "
+                        "from database: %s (%s)",
                         group["title"],
                         chat_id,
                     )
@@ -375,8 +424,6 @@ async def groups_command(
             except TelegramError as exc:
                 error_text = str(exc).lower()
 
-                # These errors normally mean the bot cannot access
-                # the group anymore.
                 if (
                     "chat not found" in error_text
                     or "kicked" in error_text
@@ -388,15 +435,14 @@ async def groups_command(
                     removed_groups += 1
 
                     logger.info(
-                        "Removed inaccessible group from database: "
-                        "%s (%s)",
+                        "Removed inaccessible group "
+                        "from database: %s (%s)",
                         group["title"],
                         chat_id,
                     )
 
                     continue
 
-                # For temporary/API errors, don't delete the group.
                 logger.warning(
                     "Could not verify group %s (%s): %s",
                     group["title"],
@@ -412,7 +458,6 @@ async def groups_command(
                     chat_id,
                 )
 
-                # Don't delete on unknown errors.
                 active_groups.append(group)
 
         if not active_groups:
@@ -424,23 +469,29 @@ async def groups_command(
             if removed_groups:
                 text += (
                     f"\n\n🧹 Removed "
-                    f"<b>{removed_groups}</b> inactive group(s)."
+                    f"<b>{removed_groups}</b> "
+                    f"inactive group(s)."
                 )
 
             await update.effective_message.reply_text(
                 text,
                 parse_mode="HTML",
             )
+
             return
 
         lines = [
             "📋 <b>Protected Groups</b>",
             "",
-            f"🛡️ Active groups: <b>{len(active_groups)}</b>",
+            f"🛡️ Active groups: "
+            f"<b>{len(active_groups)}</b>",
             "",
         ]
 
-        for index, group in enumerate(active_groups, start=1):
+        for index, group in enumerate(
+            active_groups,
+            start=1,
+        ):
             title = escape(
                 group["title"] or "Unknown Group"
             )
@@ -452,7 +503,9 @@ async def groups_command(
             username = group["username"]
 
             if username:
-                username_text = f"@{escape(username)}"
+                username_text = (
+                    f"@{escape(username)}"
+                )
             else:
                 username_text = "Private group"
 
@@ -469,7 +522,8 @@ async def groups_command(
         if removed_groups:
             lines.append(
                 f"🧹 Removed "
-                f"<b>{removed_groups}</b> inactive group(s)."
+                f"<b>{removed_groups}</b> "
+                f"inactive group(s)."
             )
 
         await update.effective_message.reply_text(
@@ -497,14 +551,19 @@ async def clear_stats_command(
 ):
     if not is_admin(update):
         await update.effective_message.reply_text(
-            "⛔ This command is only available to the bot admin."
+            "⛔ This command is only available "
+            "to the bot admin."
         )
         return
 
-    if not context.args or context.args[0].lower() != "confirm":
+    if (
+        not context.args
+        or context.args[0].lower() != "confirm"
+    ):
         await update.effective_message.reply_text(
             "⚠️ <b>Warning</b>\n\n"
-            "This will permanently delete all deletion statistics.\n\n"
+            "This will permanently delete "
+            "all deletion statistics.\n\n"
             "Your protected groups will NOT be deleted.\n\n"
             "To continue, use:\n"
             "<code>/clearstats confirm</code>",
@@ -515,11 +574,14 @@ async def clear_stats_command(
     try:
         database = get_database(context)
 
-        deleted_count = await database.clear_statistics()
+        deleted_count = (
+            await database.clear_statistics()
+        )
 
         await update.effective_message.reply_text(
             "🧹 <b>Statistics Cleared</b>\n\n"
-            f"Deleted records: <b>{deleted_count}</b>\n\n"
+            f"Deleted records: "
+            f"<b>{deleted_count}</b>\n\n"
             "✅ Protected group tracking was kept.",
             parse_mode="HTML",
         )
@@ -578,52 +640,92 @@ async def help_command(
 # ============================================================
 # DOCUMENT HANDLER
 # ============================================================
-async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.warning("🔥 DOCUMENT HANDLER TRIGGERED")
+
+async def document_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    logger.warning(
+        "🔥 DOCUMENT HANDLER TRIGGERED | update_id=%s",
+        update.update_id,
+    )
+
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
 
     if not message or not chat:
+        logger.warning(
+            "❌ Document handler received update "
+            "without message/chat."
+        )
         return
 
-    # Only monitor groups
-    if chat.type not in {"group", "supergroup"}:
-        logger.warning("❌ No message or chat in update")
+    if chat.type not in {
+        ChatType.GROUP,
+        ChatType.SUPERGROUP,
+    }:
+        logger.info(
+            "Ignoring document outside group | "
+            "chat_type=%s",
+            chat.type,
+        )
         return
 
     filename = get_filename(update)
 
     if not filename:
-        logger.warning("❌ No filename found in message")
+        logger.warning(
+            "❌ No filename found in document message."
+        )
         return
-    
+
     logger.warning(
-        "📩 MESSAGE RECEIVED | Chat=%s | Type=%s | User=%s",
+        "📩 MESSAGE RECEIVED | "
+        "Chat=%s | Type=%s | User=%s | File=%s",
         chat.id,
         chat.type,
         user.id if user else "Unknown",
+        filename,
     )
 
-    # Check blocked extension
-    if not is_blocked_filename(
-        filename,
-        settings.blocked_extensions,
-    ):
+    # --------------------------------------------------------
+    # CHECK BLOCKED EXTENSION
+    # --------------------------------------------------------
+
+    blocked_extensions = (
+        is_blocked_filename(
+            filename,
+            settings.blocked_extensions,
+        )
+    )
+
+    if not blocked_extensions:
+        logger.info(
+            "FILE ALLOWED | File=%s",
+            filename,
+        )
         return
 
     extension = get_extension(filename)
 
+    logger.warning(
+        "🚨 BLOCKED FILE DETECTED | "
+        "File=%s | Blocked=%s",
+        filename,
+        blocked_extensions,
+    )
+
     group_title = chat.title or "Unknown Group"
     group_username = chat.username
-
     user_id = user.id if user else None
 
     database = get_database(context)
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # 1. SAVE / UPDATE GROUP
-    # --------------------------------------------------
+    # --------------------------------------------------------
+
     try:
         await database.upsert_group(
             chat_id=chat.id,
@@ -644,9 +746,10 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group_title,
         )
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # 2. DELETE FILE
-    # --------------------------------------------------
+    # --------------------------------------------------------
+
     deleted = False
 
     if settings.delete_enabled:
@@ -656,7 +759,8 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             deleted = True
 
             logger.warning(
-                "FILE DELETED | File=%s | Extension=%s | Group=%s",
+                "FILE DELETED | "
+                "File=%s | Extension=%s | Group=%s",
                 filename,
                 extension,
                 group_title,
@@ -664,7 +768,8 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         except Exception:
             logger.exception(
-                "FILE DELETE FAILED | File=%s | Group=%s",
+                "FILE DELETE FAILED | "
+                "File=%s | Group=%s",
                 filename,
                 group_title,
             )
@@ -675,12 +780,14 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename,
         )
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # 3. RECORD STATISTICS
-    # --------------------------------------------------
+    # --------------------------------------------------------
+
     try:
         logger.info(
-            "RECORDING STAT | File=%s | Deleted=%s",
+            "RECORDING STAT | "
+            "File=%s | Deleted=%s",
             filename,
             deleted,
         )
@@ -717,15 +824,27 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exc,
         )
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # 4. SEND ADMIN ALERT
-    # --------------------------------------------------
+    # --------------------------------------------------------
+
     if deleted and settings.alert_admins:
         try:
             logger.info(
-                "SENDING ADMIN ALERT | File=%s | Group=%s",
+                "SENDING ADMIN ALERT | "
+                "File=%s | Group=%s",
                 filename,
                 group_title,
+            )
+
+            username = (
+                f"@{user.username}"
+                if user and user.username
+                else (
+                    user.first_name
+                    if user and user.first_name
+                    else "Unknown"
+                )
             )
 
             await send_admin_alert(
@@ -734,15 +853,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 extension=extension,
                 group_title=group_title,
                 group_id=chat.id,
-                username=(
-                    f"@{user.username}"
-                    if user and user.username
-                    else (
-                        user.first_name
-                    if user and user.first_name
-                    else "Unknown"
-                    )
-                ),
+                username=username,
                 user_id=user.id if user else None,
                 deleted=deleted,
             )
@@ -757,17 +868,40 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "ADMIN ALERT FAILED | File=%s",
                 filename,
             )
+
+
 # ============================================================
 # REGISTER HANDLERS
 # ============================================================
 
 def register_handlers(application):
+    # --------------------------------------------------------
+    # DEBUG HANDLER
+    # --------------------------------------------------------
+
+    application.add_handler(
+        MessageHandler(
+            filters.ALL,
+            debug_update_handler,
+        ),
+        group=99,
+    )
+
+    # --------------------------------------------------------
+    # DOCUMENT HANDLER
+    # --------------------------------------------------------
+
     application.add_handler(
         MessageHandler(
             filters.Document.ALL & ~filters.COMMAND,
             document_handler,
-        )
+        ),
+        group=0,
     )
+
+    # --------------------------------------------------------
+    # COMMAND HANDLERS
+    # --------------------------------------------------------
 
     application.add_handler(
         CommandHandler(
@@ -813,4 +947,14 @@ def register_handlers(application):
 
     logger.info(
         "Telegram handlers registered successfully."
+    )
+
+    logger.info(
+        "📋 Document handler registered with "
+        "filters.Document.ALL"
+    )
+
+    logger.info(
+        "🔎 Debug update handler registered "
+        "in group 99"
     )

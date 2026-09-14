@@ -124,17 +124,18 @@ async def setup_commands():
         ),
     ]
 
-    # Private chat menu
     await telegram_app.bot.set_my_commands(
         private_commands,
         scope=BotCommandScopeAllPrivateChats(),
     )
 
-    # Telegram shows this menu only to
-    # administrators of the group.
     await telegram_app.bot.set_my_commands(
         group_admin_commands,
         scope=BotCommandScopeAllChatAdministrators(),
+    )
+
+    logger.info(
+        "Telegram command menus configured."
     )
 
 
@@ -144,6 +145,7 @@ async def setup_commands():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+
     logger.info(
         "Starting Telegram File Guard..."
     )
@@ -157,18 +159,33 @@ async def lifespan(app: FastAPI):
     )
 
     await database.connect()
+
     await database.create_tables()
 
     app.state.database = database
 
     telegram_app.bot_data["database"] = database
 
+    logger.info(
+        "Database connected and attached to Telegram application."
+    )
+
     # --------------------------------------------------------
     # TELEGRAM
     # --------------------------------------------------------
 
     await telegram_app.initialize()
+
+    logger.info(
+        "Telegram application initialized."
+    )
+
     await telegram_app.start()
+
+    logger.info(
+        "Telegram application started."
+    )
+
     await setup_commands()
 
     # ========================================================
@@ -188,6 +205,10 @@ async def lifespan(app: FastAPI):
         await telegram_app.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
+        )
+
+        logger.info(
+            "Local polling started."
         )
 
     # ========================================================
@@ -214,28 +235,37 @@ async def lifespan(app: FastAPI):
             "/telegram/webhook"
         )
 
-        webhook_result = await telegram_app.bot.set_webhook(
-            url=webhook_url,
-            secret_token=settings.webhook_secret,
-            allowed_updates=Update.ALL_TYPES,
-            max_connections=settings.webhook_max_connections,
-            drop_pending_updates=False,
+        webhook_result = (
+            await telegram_app.bot.set_webhook(
+                url=webhook_url,
+                secret_token=settings.webhook_secret,
+                allowed_updates=Update.ALL_TYPES,
+                max_connections=(
+                    settings.webhook_max_connections
+                ),
+                drop_pending_updates=False,
+            )
         )
 
         logger.info(
-            "Telegram webhook configured: %s | result=%s",
-        webhook_url,
-        webhook_result,
+            "Telegram webhook configured: "
+            "%s | result=%s",
+            webhook_url,
+            webhook_result,
         )
 
-        webhook_info = await telegram_app.bot.get_webhook_info()
+        webhook_info = (
+            await telegram_app.bot.get_webhook_info()
+        )
+
         logger.info(
-            "Telegram webhook status: url=%s | pending_updates=%s",
+            "Telegram webhook status: "
+            "url=%s | pending_updates=%s",
             webhook_info.url,
             webhook_info.pending_update_count,
         )
-    try:
 
+    try:
         yield
 
     finally:
@@ -251,7 +281,6 @@ async def lifespan(app: FastAPI):
         if not is_production():
 
             try:
-
                 if (
                     telegram_app.updater
                     and telegram_app.updater.running
@@ -263,7 +292,6 @@ async def lifespan(app: FastAPI):
                     )
 
             except Exception:
-
                 logger.exception(
                     "Error stopping polling."
                 )
@@ -271,9 +299,12 @@ async def lifespan(app: FastAPI):
         # ----------------------------------------------------
         # WEBHOOK SHUTDOWN
         # ----------------------------------------------------
+
         else:
+
             logger.info(
-            "Keeping Telegram webhook configured during shutdown."
+                "Keeping Telegram webhook configured "
+                "during shutdown."
             )
 
         # ----------------------------------------------------
@@ -281,22 +312,18 @@ async def lifespan(app: FastAPI):
         # ----------------------------------------------------
 
         try:
-
             if telegram_app.running:
                 await telegram_app.stop()
 
         except Exception:
-
             logger.exception(
                 "Error stopping Telegram application."
             )
 
         try:
-
             await telegram_app.shutdown()
 
         except Exception:
-
             logger.exception(
                 "Error shutting down Telegram application."
             )
@@ -306,11 +333,9 @@ async def lifespan(app: FastAPI):
         # ----------------------------------------------------
 
         try:
-
             await database.close()
 
         except Exception:
-
             logger.exception(
                 "Error closing database."
             )
@@ -361,9 +386,7 @@ async def health(request: Request):
         None,
     )
 
-    # Database was never initialized
     if database is None:
-
         return JSONResponse(
             status_code=503,
             content={
@@ -374,15 +397,11 @@ async def health(request: Request):
         )
 
     # --------------------------------------------------------
-    # Check database connection
+    # CHECK DATABASE
     # --------------------------------------------------------
 
     try:
 
-        # The Database class in this project does not
-        # currently expose a ping() method.
-        #
-        # Instead, check the underlying asyncpg pool.
         pool = getattr(
             database,
             "pool",
@@ -408,7 +427,6 @@ async def health(request: Request):
                 },
             )
 
-        # Execute a lightweight PostgreSQL query.
         async with pool.acquire() as connection:
 
             await connection.fetchval(
@@ -426,7 +444,7 @@ async def health(request: Request):
         db_ok = False
 
     # --------------------------------------------------------
-    # Database unavailable
+    # DATABASE UNAVAILABLE
     # --------------------------------------------------------
 
     if not db_ok:
@@ -445,7 +463,7 @@ async def health(request: Request):
         )
 
     # --------------------------------------------------------
-    # Everything is healthy
+    # EVERYTHING HEALTHY
     # --------------------------------------------------------
 
     return {
@@ -470,7 +488,14 @@ async def telegram_webhook(
         default=None
     ),
 ):
-    logger.warning("🔥 TELEGRAM WEBHOOK RECEIVED")
+
+    logger.warning(
+        "🔥 TELEGRAM WEBHOOK RECEIVED"
+    )
+
+    # --------------------------------------------------------
+    # PRODUCTION CHECK
+    # --------------------------------------------------------
 
     if not is_production():
 
@@ -482,47 +507,98 @@ async def telegram_webhook(
             ),
         )
 
+    # --------------------------------------------------------
+    # SECRET TOKEN CHECK
+    # --------------------------------------------------------
+
     if (
         x_telegram_bot_api_secret_token
         != settings.webhook_secret
     ):
 
+        logger.error(
+            "❌ INVALID TELEGRAM WEBHOOK SECRET"
+        )
+
         raise HTTPException(
             status_code=403,
-            detail=(
-                "Invalid webhook secret."
-            ),
+            detail="Invalid webhook secret.",
         )
+
+    # --------------------------------------------------------
+    # READ TELEGRAM UPDATE
+    # --------------------------------------------------------
 
     try:
 
         data = await request.json()
+
+        logger.info(
+            "📦 TELEGRAM UPDATE RECEIVED | "
+            "update_id=%s",
+            data.get("update_id"),
+        )
 
         update = Update.de_json(
             data,
             telegram_app.bot,
         )
 
-        await telegram_app.update_queue.put(
-            update
+        logger.info(
+            "✅ TELEGRAM UPDATE PARSED | "
+            "update_id=%s",
+            update.update_id,
         )
 
     except Exception:
 
         logger.exception(
-            "Failed to process webhook update."
+            "❌ FAILED TO PARSE TELEGRAM UPDATE"
         )
 
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Invalid Telegram update."
-            ),
+            detail="Invalid Telegram update.",
+        )
+
+    # --------------------------------------------------------
+    # DIRECTLY PROCESS UPDATE
+    # --------------------------------------------------------
+
+    try:
+
+        logger.info(
+            "🚀 PROCESSING TELEGRAM UPDATE | "
+            "update_id=%s",
+            update.update_id,
+        )
+
+        await telegram_app.process_update(
+            update
+        )
+
+        logger.info(
+            "✅ TELEGRAM UPDATE PROCESSED | "
+            "update_id=%s",
+            update.update_id,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "❌ FAILED TO PROCESS TELEGRAM UPDATE | "
+            "update_id=%s",
+            update.update_id,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to process Telegram update.",
         )
 
     return JSONResponse(
         {
-            "ok": True
+            "ok": True,
         }
     )
 
