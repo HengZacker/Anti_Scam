@@ -1,6 +1,10 @@
 from pathlib import Path
 
 
+# ============================================================
+# NORMALIZE FILENAME
+# ============================================================
+
 def normalize_filename(
     filename: str | None,
 ) -> str:
@@ -16,6 +20,10 @@ def normalize_filename(
     )
 
 
+# ============================================================
+# GET ALL EXTENSIONS
+# ============================================================
+
 def get_all_extensions(
     filename: str | None,
 ) -> list[str]:
@@ -28,6 +36,7 @@ def get_all_extensions(
         ".",
         "..",
     }:
+
         return []
 
     return [
@@ -35,6 +44,10 @@ def get_all_extensions(
         for suffix in Path(name).suffixes
     ]
 
+
+# ============================================================
+# GET FINAL EXTENSION
+# ============================================================
 
 def get_extension(
     filename: str | None,
@@ -50,19 +63,29 @@ def get_extension(
     return extensions[-1]
 
 
+# ============================================================
+# FIND BLOCKED EXTENSIONS
+# ============================================================
+
 def find_blocked_extensions(
     filename: str | None,
     blocked_extensions,
 ) -> list[str]:
 
+    extensions = get_all_extensions(
+        filename
+    )
+
     return [
         extension
-        for extension in get_all_extensions(
-            filename
-        )
+        for extension in extensions
         if extension in blocked_extensions
     ]
 
+
+# ============================================================
+# CHECK IF FILE IS BLOCKED
+# ============================================================
 
 def is_blocked_filename(
     filename: str | None,
