@@ -613,7 +613,9 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     database = get_database(context)
 
-    # Track the group
+    # --------------------------------------------------
+    # 1. SAVE / UPDATE GROUP
+    # --------------------------------------------------
     try:
         await database.upsert_group(
             chat_id=chat.id,
@@ -621,47 +623,60 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username=group_username,
             chat_type=chat.type,
         )
+
+        logger.info(
+            "GROUP TRACKED | %s | %s",
+            group_title,
+            chat.id,
+        )
+
     except Exception:
         logger.exception(
-            "Failed to update group information: %s",
+            "GROUP TRACKING FAILED | %s",
             group_title,
         )
 
-    # Delete the blocked file
+    # --------------------------------------------------
+    # 2. DELETE FILE
+    # --------------------------------------------------
     deleted = False
 
     if settings.delete_enabled:
         try:
             await message.delete()
+
             deleted = True
 
             logger.warning(
-                "DELETED BLOCKED FILE | "
-                "File=%s | Extension=%s | Group=%s | ChatID=%s",
+                "FILE DELETED | File=%s | Extension=%s | Group=%s",
                 filename,
                 extension,
                 group_title,
-                chat.id,
             )
 
         except Exception:
             logger.exception(
-                "FAILED TO DELETE BLOCKED FILE | "
-                "File=%s | Group=%s | ChatID=%s",
+                "FILE DELETE FAILED | File=%s | Group=%s",
                 filename,
                 group_title,
-                chat.id,
             )
 
     else:
         logger.warning(
-            "DELETE_ENABLED is FALSE | File=%s",
+            "DELETE DISABLED | File=%s",
             filename,
         )
 
-    # IMPORTANT:
-    # Record the deletion event AFTER attempting deletion.
+    # --------------------------------------------------
+    # 3. RECORD STATISTICS
+    # --------------------------------------------------
     try:
+        logger.info(
+            "RECORDING STAT | File=%s | Deleted=%s",
+            filename,
+            deleted,
+        )
+
         await database.record_deletion(
             message_id=message.message_id,
             chat_id=chat.id,
@@ -678,32 +693,48 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         logger.info(
-            "STAT RECORDED SUCCESSFULLY | "
-            "File=%s | Extension=%s | Group=%s | Deleted=%s",
+            "STAT RECORDED | File=%s | Deleted=%s",
             filename,
-            extension,
-            group_title,
             deleted,
         )
 
     except Exception:
         logger.exception(
-            "STAT RECORDING FAILED | "
-            "File=%s | Group=%s",
+            "STAT RECORD FAILED | File=%s | Group=%s",
             filename,
             group_title,
         )
 
-    # Notify admins
-    if deleted:
-        await send_admin_alert(
-            context,
-            filename=filename,
-            extension=extension,
-            group_title=group_title,
-            group_username=group_username,
-            user=user,
-        )
+    # --------------------------------------------------
+    # 4. SEND ADMIN ALERT
+    # --------------------------------------------------
+    if deleted and settings.alert_admins:
+        try:
+            logger.info(
+                "SENDING ADMIN ALERT | File=%s | Group=%s",
+                filename,
+                group_title,
+            )
+
+            await send_admin_alert(
+                context,
+                filename=filename,
+                extension=extension,
+                group_title=group_title,
+                group_username=group_username,
+                user=user,
+            )
+
+            logger.info(
+                "ADMIN ALERT SENT | File=%s",
+                filename,
+            )
+
+        except Exception:
+            logger.exception(
+                "ADMIN ALERT FAILED | File=%s",
+                filename,
+            )
 # ============================================================
 # REGISTER HANDLERS
 # ============================================================
