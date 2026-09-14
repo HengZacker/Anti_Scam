@@ -675,12 +675,12 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             deleted,
         )
 
-        await database.record_deletion(
+        record_id = await database.record_deletion(
             message_id=message.message_id,
             chat_id=chat.id,
             group_title=group_title,
             group_username=group_username,
-            user_id=user_id,
+            user_id=user.id if user else None,
             username=user.username if user else None,
             first_name=user.first_name if user else None,
             last_name=user.last_name if user else None,
@@ -692,17 +692,19 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         logger.info(
             "STAT RECORDED SUCCESSFULLY | "
-            "File=%s | Deleted=%s",
+            "Record ID=%s | File=%s | Deleted=%s",
+            record_id,
             filename,
             deleted,
         )
 
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "STAT RECORDING FAILED | "
-            "File=%s | Group=%s",
+            "File=%s | Group=%s | Error=%s",
             filename,
             group_title,
+            exc,
         )
 
     # --------------------------------------------------

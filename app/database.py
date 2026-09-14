@@ -1,5 +1,7 @@
 import logging
+from multiprocessing import pool
 from typing import Any
+from unittest import result
 
 import asyncpg
 
@@ -276,11 +278,11 @@ class Database:
         file_extension: str,
         reason: str,
         deleted_successfully: bool,
-    ):
+    ) -> int:
         pool = self._require_pool()
 
         async with pool.acquire() as conn:
-            await conn.execute(
+            record_id = await conn.fetchval(
                 """
                 INSERT INTO deletion_events (
                     message_id,
@@ -310,6 +312,7 @@ class Database:
                     $11,
                     $12
                 )
+                RETURNING id
                 """,
                 message_id,
                 chat_id,
@@ -324,6 +327,16 @@ class Database:
                 reason,
                 deleted_successfully,
             )
+
+        logger.info(
+            "DATABASE INSERT SUCCESS | "
+            "deletion_events.id=%s | file=%s | deleted=%s",
+            record_id,
+            file_name,
+            deleted_successfully,
+        )
+
+        return int(record_id)
 
     # ========================================================
     # STATISTICS
@@ -384,7 +397,7 @@ class Database:
                 """
             )
 
-        return {
+        result = {
             "total": int(total or 0),
             "successful": int(successful or 0),
             "failed": int(failed or 0),
@@ -393,6 +406,12 @@ class Database:
             "today": int(today or 0),
         }
 
+        logger.info(
+            "STATISTICS QUERY RESULT | %s",
+            result,
+        )
+
+        return result
     # ========================================================
     # CLEAR STATISTICS
     # ========================================================
