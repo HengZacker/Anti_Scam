@@ -1,5 +1,9 @@
 import logging
 
+import sys
+
+print("🐍 PYTHON VERSION:", sys.version)
+
 from contextlib import asynccontextmanager
 
 from fastapi import (
