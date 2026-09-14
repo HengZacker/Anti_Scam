@@ -266,20 +266,10 @@ async def lifespan(app: FastAPI):
         # ----------------------------------------------------
         # WEBHOOK SHUTDOWN
         # ----------------------------------------------------
-
         else:
-
-            try:
-
-                await telegram_app.bot.delete_webhook(
-                    drop_pending_updates=False
-                )
-
-            except Exception:
-
-                logger.exception(
-                    "Error deleting webhook."
-                )
+            logger.info(
+            "Keeping Telegram webhook configured during shutdown."
+            )
 
         # ----------------------------------------------------
         # TELEGRAM SHUTDOWN
