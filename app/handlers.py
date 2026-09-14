@@ -591,7 +591,7 @@ async def document_handler(
     if not message or not chat:
         return
 
-    # Only protect groups and supergroups
+    # Only process files in groups/supergroups
     if chat.type not in {
         ChatType.GROUP,
         ChatType.SUPERGROUP,
@@ -603,8 +603,11 @@ async def document_handler(
     if not filename:
         return
 
-    # Ignore safe files
-    if not is_blocked_filename(filename):
+    # Check whether the filename is blocked
+    if not is_blocked_filename(
+        filename,
+        settings.blocked_extensions,
+    ):
         return
 
     extension = get_extension(filename)
@@ -617,9 +620,7 @@ async def document_handler(
             if user.username
             else user.first_name or "Unknown"
         )
-
         user_id = user.id
-
     else:
         username = "Unknown"
         user_id = None
@@ -627,64 +628,66 @@ async def document_handler(
     group_title = chat.title or "Unknown Group"
     group_username = chat.username
 
-    deleted = False
-
     # --------------------------------------------------------
-    # Delete blocked file
-    # --------------------------------------------------------
-
-    if settings.delete_enabled:
-        try:
-            result = await message.delete()
-
-            deleted = bool(result)
-
-            if deleted:
-                logger.warning(
-                    "Deleted blocked file: %s | "
-                    "Group: %s | Group ID: %s",
-                    filename,
-                    group_title,
-                    chat.id,
-                )
-            else:
-                logger.warning(
-                    "Telegram returned unsuccessful delete "
-                    "result for file: %s | Group: %s",
-                    filename,
-                    group_title,
-                )
-
-        except Exception:
-            logger.exception(
-                "Failed to delete blocked file: %s | "
-                "Group: %s",
-                filename,
-                group_title,
-            )
-
-    else:
-        logger.warning(
-            "Delete disabled. Blocked file detected: %s | "
-            "Group: %s",
-            filename,
-            group_title,
-        )
-
-    # --------------------------------------------------------
-    # Database
+    # TRACK GROUP
     # --------------------------------------------------------
 
     try:
         database = get_database(context)
 
-        # Make sure the group is registered
         await database.upsert_group(
             chat_id=chat.id,
             title=group_title,
             username=group_username,
             chat_type=chat.type,
         )
+
+    except Exception:
+        logger.exception(
+            "Failed to update group tracking."
+        )
+
+    # --------------------------------------------------------
+    # DELETE FILE
+    # --------------------------------------------------------
+
+    deleted = False
+
+    if settings.delete_enabled:
+        try:
+            await message.delete()
+
+            deleted = True
+
+            logger.warning(
+                "Deleted blocked file: %s | Group: %s | ID: %s",
+                filename,
+                group_title,
+                chat.id,
+            )
+
+        except Exception:
+            logger.exception(
+                "FAILED TO DELETE blocked file: %s | "
+                "Group: %s | ID: %s",
+                filename,
+                group_title,
+                chat.id,
+            )
+
+    else:
+        logger.warning(
+            "DELETE_ENABLED is FALSE. "
+            "Blocked file was NOT deleted: %s",
+            filename,
+        )
+
+    # --------------------------------------------------------
+    # RECORD DATABASE EVENT
+    # --------------------------------------------------------
+
+    try:
+        database = get_database(context)
 
         await database.record_deletion(
             message_id=message.message_id,
@@ -703,22 +706,14 @@ async def document_handler(
 
     except Exception:
         logger.exception(
-            "Failed to record blocked file in database: %s",
-            filename,
+            "Failed to record deletion event."
         )
 
     # --------------------------------------------------------
-    # Admin alert
+    # ADMIN ALERT
     # --------------------------------------------------------
 
     if settings.alert_admins:
-        logger.info(
-            "Sending admin security alert for file: %s | "
-            "Deleted: %s",
-            filename,
-            deleted,
-        )
-
         await send_admin_alert(
             context,
             filename=filename,
@@ -729,17 +724,11 @@ async def document_handler(
             user_id=user_id,
             deleted=deleted,
         )
-
-
 # ============================================================
 # REGISTER HANDLERS
 # ============================================================
 
 def register_handlers(application):
-    # --------------------------------------------------------
-    # Block suspicious documents
-    # --------------------------------------------------------
-
     application.add_handler(
         MessageHandler(
             filters.Document.ALL & ~filters.COMMAND,
@@ -747,32 +736,46 @@ def register_handlers(application):
         )
     )
 
-    # --------------------------------------------------------
-    # Commands
-    # --------------------------------------------------------
-
     application.add_handler(
-        CommandHandler("start", start_command)
+        CommandHandler(
+            "start",
+            start_command,
+        )
     )
 
     application.add_handler(
-        CommandHandler("help", help_command)
+        CommandHandler(
+            "help",
+            help_command,
+        )
     )
 
     application.add_handler(
-        CommandHandler("id", id_command)
+        CommandHandler(
+            "id",
+            id_command,
+        )
     )
 
     application.add_handler(
-        CommandHandler("stats", stats_command)
+        CommandHandler(
+            "stats",
+            stats_command,
+        )
     )
 
     application.add_handler(
-        CommandHandler("groups", groups_command)
+        CommandHandler(
+            "groups",
+            groups_command,
+        )
     )
 
     application.add_handler(
-        CommandHandler("clearstats", clear_stats_command)
+        CommandHandler(
+            "clearstats",
+            clear_stats_command,
+        )
     )
 
     logger.info(
