@@ -60,7 +60,6 @@ def get_database(context: ContextTypes.DEFAULT_TYPE) -> Database:
 # ============================================================
 # ADMIN ALERT
 # ============================================================
-
 async def send_admin_alert(
     context: ContextTypes.DEFAULT_TYPE,
     *,
@@ -138,7 +137,6 @@ async def send_admin_alert(
                 "to admin %s",
                 admin_id,
             )
-
 
 # ============================================================
 # GROUP TRACKING
@@ -693,14 +691,16 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         logger.info(
-            "STAT RECORDED | File=%s | Deleted=%s",
+            "STAT RECORDED SUCCESSFULLY | "
+            "File=%s | Deleted=%s",
             filename,
             deleted,
         )
 
     except Exception:
         logger.exception(
-            "STAT RECORD FAILED | File=%s | Group=%s",
+            "STAT RECORDING FAILED | "
+            "File=%s | Group=%s",
             filename,
             group_title,
         )
@@ -721,8 +721,18 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename=filename,
                 extension=extension,
                 group_title=group_title,
-                group_username=group_username,
-                user=user,
+                group_id=chat.id,
+                username=(
+                    f"@{user.username}"
+                    if user and user.username
+                    else (
+                        user.first_name
+                    if user and user.first_name
+                    else "Unknown"
+                    )
+                ),
+                user_id=user.id if user else None,
+                deleted=deleted,
             )
 
             logger.info(
