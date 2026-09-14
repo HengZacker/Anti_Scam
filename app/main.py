@@ -1,14 +1,27 @@
 import logging
+
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+)
+
 from fastapi.responses import JSONResponse
 
-from telegram import BotCommand, Update
+from telegram import (
+    BotCommand,
+    Update,
+)
+
 from telegram.ext import Application
 
-from app.config import Settings
+from app.config import settings
+
 from app.database import Database
+
 from app.handlers import register_handlers
 
 
@@ -26,14 +39,22 @@ logging.basicConfig(
     ),
 )
 
-logger = logging.getLogger("telegram-file-guard")
+logger = logging.getLogger(
+    "telegram-file-guard"
+)
 
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
-settings = Settings()
+# IMPORTANT:
+# Do NOT use:
+#
+#     settings = Settings()
+#
+# Settings are already loaded by app.config.
+settings = settings
 
 
 # ============================================================
@@ -58,14 +79,21 @@ telegram_app = (
 
 
 # Make settings available to handlers.
-telegram_app.bot_data["settings"] = settings
+telegram_app.bot_data[
+    "settings"
+] = settings
+
 
 # Make database available to handlers.
-telegram_app.bot_data["database"] = database
+telegram_app.bot_data[
+    "database"
+] = database
 
 
 # Register Telegram handlers.
-register_handlers(telegram_app)
+register_handlers(
+    telegram_app
+)
 
 
 # ============================================================
@@ -73,7 +101,11 @@ register_handlers(telegram_app)
 # ============================================================
 
 def is_production() -> bool:
-    return settings.environment.lower() == "production"
+
+    return (
+        settings.environment.lower()
+        == "production"
+    )
 
 
 # ============================================================
@@ -81,15 +113,20 @@ def is_production() -> bool:
 # ============================================================
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(
+    app: FastAPI,
+):
 
-    logger.info("🚀 Starting Telegram File Guard...")
+    logger.info(
+        "🚀 Starting Telegram File Guard..."
+    )
 
-    # --------------------------------------------------------
+    # ========================================================
     # DATABASE
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
+
         await database.connect()
 
         await database.create_tables()
@@ -101,17 +138,19 @@ async def lifespan(app: FastAPI):
         )
 
     except Exception:
+
         logger.exception(
             "❌ Database initialization failed."
         )
 
         raise
 
-    # --------------------------------------------------------
+    # ========================================================
     # TELEGRAM APPLICATION
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
+
         await telegram_app.initialize()
 
         await telegram_app.start()
@@ -121,39 +160,46 @@ async def lifespan(app: FastAPI):
         )
 
     except Exception:
+
         logger.exception(
             "❌ Telegram application startup failed."
         )
 
         raise
 
-    # --------------------------------------------------------
+    # ========================================================
     # BOT COMMANDS
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
+
         await telegram_app.bot.set_my_commands(
             [
                 BotCommand(
                     "start",
                     "Start File Guard",
                 ),
+
                 BotCommand(
                     "help",
                     "Show help",
                 ),
+
                 BotCommand(
                     "id",
                     "Show Telegram ID",
                 ),
+
                 BotCommand(
                     "stats",
                     "View statistics",
                 ),
+
                 BotCommand(
                     "groups",
                     "View protected groups",
                 ),
+
                 BotCommand(
                     "clearstats",
                     "Clear statistics",
@@ -166,18 +212,19 @@ async def lifespan(app: FastAPI):
         )
 
     except Exception:
+
         logger.exception(
             "⚠️ Failed to configure bot commands."
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # WEBHOOK / LOCAL POLLING
-    # --------------------------------------------------------
+    # ========================================================
 
     if is_production():
 
         webhook_url = (
-            f"{settings.render_external_url.rstrip('/')}"
+            f"{settings.render_external_url}"
             "/telegram/webhook"
         )
 
@@ -190,12 +237,28 @@ async def lifespan(app: FastAPI):
             webhook_url,
         )
 
+        # ====================================================
+        # SET TELEGRAM WEBHOOK
+        # ====================================================
+
         try:
+
             await telegram_app.bot.set_webhook(
+
                 url=webhook_url,
-                secret_token=settings.webhook_secret,
-                allowed_updates=Update.ALL_TYPES,
-                max_connections=settings.webhook_max_connections,
+
+                secret_token=(
+                    settings.webhook_secret
+                ),
+
+                allowed_updates=(
+                    Update.ALL_TYPES
+                ),
+
+                max_connections=(
+                    settings.webhook_max_connections
+                ),
+
                 drop_pending_updates=False,
             )
 
@@ -204,15 +267,23 @@ async def lifespan(app: FastAPI):
             )
 
         except Exception:
+
             logger.exception(
-                "❌ Failed to configure Telegram webhook."
+                "❌ Failed to configure "
+                "Telegram webhook."
             )
 
             raise
 
+        # ====================================================
+        # WEBHOOK INFORMATION
+        # ====================================================
+
         try:
+
             webhook_info = (
-                await telegram_app.bot.get_webhook_info()
+                await telegram_app.bot
+                .get_webhook_info()
             )
 
             logger.info(
@@ -221,15 +292,21 @@ async def lifespan(app: FastAPI):
                 "pending=%s | "
                 "last_error=%s | "
                 "last_error_date=%s",
+
                 webhook_info.url,
+
                 webhook_info.pending_update_count,
+
                 webhook_info.last_error_message,
+
                 webhook_info.last_error_date,
             )
 
         except Exception:
+
             logger.exception(
-                "⚠️ Failed to retrieve webhook information."
+                "⚠️ Failed to retrieve "
+                "webhook information."
             )
 
     else:
@@ -238,23 +315,45 @@ async def lifespan(app: FastAPI):
             "💻 LOCAL MODE"
         )
 
+        # ====================================================
+        # REMOVE EXISTING WEBHOOK
+        # ====================================================
+
         try:
+
             await telegram_app.bot.delete_webhook(
                 drop_pending_updates=True
             )
 
             logger.info(
-                "🧹 Existing webhook removed for local mode."
+                "🧹 Existing webhook removed "
+                "for local mode."
             )
 
         except Exception:
+
             logger.exception(
                 "⚠️ Failed to remove webhook."
             )
 
+        # ====================================================
+        # START POLLING
+        # ====================================================
+
         try:
+
+            if telegram_app.updater is None:
+
+                raise RuntimeError(
+                    "Telegram updater is not available."
+                )
+
             await telegram_app.updater.start_polling(
-                allowed_updates=Update.ALL_TYPES,
+
+                allowed_updates=(
+                    Update.ALL_TYPES
+                ),
+
                 drop_pending_updates=True,
             )
 
@@ -263,33 +362,42 @@ async def lifespan(app: FastAPI):
             )
 
         except Exception:
+
             logger.exception(
                 "❌ Failed to start Telegram polling."
             )
 
             raise
 
+    # ========================================================
+    # READY
+    # ========================================================
+
     logger.info(
         "🛡️ Telegram File Guard is ready."
     )
 
     try:
+
         yield
 
     finally:
 
         logger.info(
-            "🛑 Shutting down Telegram File Guard..."
+            "🛑 Shutting down "
+            "Telegram File Guard..."
         )
 
-        # ----------------------------------------------------
+        # ====================================================
         # LOCAL POLLING SHUTDOWN
-        # ----------------------------------------------------
+        # ====================================================
 
         if not is_production():
 
             try:
+
                 if telegram_app.updater:
+
                     await telegram_app.updater.stop()
 
                     logger.info(
@@ -297,15 +405,18 @@ async def lifespan(app: FastAPI):
                     )
 
             except Exception:
+
                 logger.exception(
-                    "⚠️ Failed to stop Telegram polling."
+                    "⚠️ Failed to stop "
+                    "Telegram polling."
                 )
 
-        # ----------------------------------------------------
+        # ====================================================
         # TELEGRAM APPLICATION SHUTDOWN
-        # ----------------------------------------------------
+        # ====================================================
 
         try:
+
             await telegram_app.stop()
 
             logger.info(
@@ -313,27 +424,34 @@ async def lifespan(app: FastAPI):
             )
 
         except Exception:
+
             logger.exception(
-                "⚠️ Failed to stop Telegram application."
+                "⚠️ Failed to stop "
+                "Telegram application."
             )
 
         try:
+
             await telegram_app.shutdown()
 
             logger.info(
-                "✅ Telegram application shutdown complete."
+                "✅ Telegram application "
+                "shutdown complete."
             )
 
         except Exception:
+
             logger.exception(
-                "⚠️ Failed to shutdown Telegram application."
+                "⚠️ Failed to shutdown "
+                "Telegram application."
             )
 
-        # ----------------------------------------------------
+        # ====================================================
         # DATABASE SHUTDOWN
-        # ----------------------------------------------------
+        # ====================================================
 
         try:
+
             await database.close()
 
             logger.info(
@@ -341,12 +459,15 @@ async def lifespan(app: FastAPI):
             )
 
         except Exception:
+
             logger.exception(
-                "⚠️ Failed to close database."
+                "⚠️ Failed to close "
+                "database connection."
             )
 
         logger.info(
-            "👋 Telegram File Guard shutdown complete."
+            "👋 Telegram File Guard "
+            "shutdown complete."
         )
 
 
@@ -376,6 +497,7 @@ async def health():
         pool = database.pool
 
         if pool is None:
+
             return JSONResponse(
                 status_code=503,
                 content={
@@ -414,10 +536,16 @@ async def health():
 # TELEGRAM WEBHOOK
 # ============================================================
 
-@app.post("/telegram/webhook")
+@app.post(
+    "/telegram/webhook"
+)
 async def telegram_webhook(
+
     request: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(
+
+    x_telegram_bot_api_secret_token: (
+        str | None
+    ) = Header(
         default=None
     ),
 ):
@@ -426,20 +554,23 @@ async def telegram_webhook(
         "🔥 TELEGRAM WEBHOOK RECEIVED"
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # PRODUCTION CHECK
-    # --------------------------------------------------------
+    # ========================================================
 
     if not is_production():
 
         raise HTTPException(
             status_code=404,
-            detail="Webhook is disabled in local mode.",
+            detail=(
+                "Webhook is disabled "
+                "in local mode."
+            ),
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # SECRET CHECK
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         x_telegram_bot_api_secret_token
@@ -455,9 +586,9 @@ async def telegram_webhook(
             detail="Invalid webhook secret.",
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # READ JSON
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
 
@@ -480,9 +611,9 @@ async def telegram_webhook(
             detail="Invalid Telegram JSON.",
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # PARSE TELEGRAM UPDATE
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
 
@@ -490,6 +621,12 @@ async def telegram_webhook(
             data,
             telegram_app.bot,
         )
+
+        if update is None:
+
+            raise ValueError(
+                "Telegram returned an empty update."
+            )
 
         logger.info(
             "✅ TELEGRAM UPDATE PARSED | "
@@ -500,7 +637,8 @@ async def telegram_webhook(
     except Exception:
 
         logger.exception(
-            "❌ FAILED TO PARSE TELEGRAM UPDATE"
+            "❌ FAILED TO PARSE "
+            "TELEGRAM UPDATE"
         )
 
         raise HTTPException(
@@ -508,9 +646,9 @@ async def telegram_webhook(
             detail="Invalid Telegram update.",
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # RAW UPDATE DIAGNOSTICS
-    # --------------------------------------------------------
+    # ========================================================
 
     logger.warning(
         "🔍 RAW UPDATE TYPES | "
@@ -520,17 +658,23 @@ async def telegram_webhook(
         "edited_channel_post=%s | "
         "callback_query=%s | "
         "my_chat_member=%s",
+
         bool(update.message),
+
         bool(update.edited_message),
+
         bool(update.channel_post),
+
         bool(update.edited_channel_post),
+
         bool(update.callback_query),
+
         bool(update.my_chat_member),
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # MESSAGE DIAGNOSTICS
-    # --------------------------------------------------------
+    # ========================================================
 
     if update.message:
 
@@ -541,10 +685,15 @@ async def telegram_webhook(
             "video=%s | "
             "audio=%s | "
             "text=%s",
+
             bool(update.message.document),
+
             bool(update.message.photo),
+
             bool(update.message.video),
+
             bool(update.message.audio),
+
             bool(update.message.text),
         )
 
@@ -554,13 +703,15 @@ async def telegram_webhook(
                 "📄 DOCUMENT FOUND | "
                 "filename=%s | "
                 "mime_type=%s",
+
                 update.message.document.file_name,
+
                 update.message.document.mime_type,
             )
 
-    # --------------------------------------------------------
+    # ========================================================
     # PROCESS UPDATE DIRECTLY
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
 
@@ -583,18 +734,22 @@ async def telegram_webhook(
     except Exception:
 
         logger.exception(
-            "❌ FAILED TO PROCESS TELEGRAM UPDATE | "
+            "❌ FAILED TO PROCESS "
+            "TELEGRAM UPDATE | "
             "update_id=%s",
             update.update_id,
         )
 
         raise HTTPException(
             status_code=500,
-            detail="Failed to process Telegram update.",
+            detail=(
+                "Failed to process "
+                "Telegram update."
+            ),
         )
 
     return JSONResponse(
-        {
+        content={
             "ok": True
         }
     )

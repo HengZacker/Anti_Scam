@@ -1,4 +1,5 @@
 import os
+
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -193,7 +194,6 @@ def get_int(
         )
 
     except ValueError:
-
         result = default
 
     if minimum is not None:
@@ -223,7 +223,6 @@ def parse_extensions() -> frozenset[str]:
     ).strip()
 
     if not raw:
-
         return DEFAULT_BLOCKED_EXTENSIONS
 
     result = set()
@@ -276,13 +275,11 @@ def parse_admin_ids() -> tuple[int, ...]:
             continue
 
         try:
-
             result.append(
                 int(item)
             )
 
         except ValueError as exc:
-
             raise RuntimeError(
                 "ADMIN_IDS must contain "
                 "numeric Telegram IDs. "
@@ -361,41 +358,57 @@ def load_settings() -> Settings:
         "local",
     ).strip().lower()
 
+    render_external_url = (
+        os.getenv(
+            "RENDER_EXTERNAL_URL",
+            "",
+        )
+        .strip()
+        .rstrip("/")
+    )
+
+    # ========================================================
+    # REQUIRED SETTINGS
+    # ========================================================
 
     if not bot_token:
-
         raise RuntimeError(
-            "BOT_TOKEN is missing from .env"
+            "BOT_TOKEN is missing."
         )
-
 
     if not database_url:
-
         raise RuntimeError(
-            "DATABASE_URL is missing from .env"
+            "DATABASE_URL is missing."
         )
-
 
     if not dashboard_token:
-
         raise RuntimeError(
-            "DASHBOARD_TOKEN is missing from .env"
+            "DASHBOARD_TOKEN is missing."
         )
-
-
-    if not webhook_secret:
-
-        raise RuntimeError(
-            "WEBHOOK_SECRET is missing from .env"
-        )
-
 
     if not admin_ids:
-
         raise RuntimeError(
             "ADMIN_IDS is missing or empty."
         )
 
+    # Webhook settings are required only in production.
+    if environment == "production":
+
+        if not webhook_secret:
+            raise RuntimeError(
+                "WEBHOOK_SECRET is required "
+                "in production."
+            )
+
+        if not render_external_url:
+            raise RuntimeError(
+                "RENDER_EXTERNAL_URL is required "
+                "in production."
+            )
+
+    # ========================================================
+    # CREATE SETTINGS
+    # ========================================================
 
     return Settings(
 
@@ -409,14 +422,7 @@ def load_settings() -> Settings:
 
         webhook_secret=webhook_secret,
 
-        render_external_url=(
-            os.getenv(
-                "RENDER_EXTERNAL_URL",
-                "",
-            )
-            .strip()
-            .rstrip("/")
-        ),
+        render_external_url=render_external_url,
 
         environment=environment,
 
@@ -452,5 +458,9 @@ def load_settings() -> Settings:
         blocked_extensions=parse_extensions(),
     )
 
+
+# ============================================================
+# GLOBAL SETTINGS INSTANCE
+# ============================================================
 
 settings = load_settings()
