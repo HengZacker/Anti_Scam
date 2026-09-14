@@ -349,7 +349,10 @@ async def root():
 # HEALTH
 # ============================================================
 
-@app.get("/health")
+@app.api_route(
+    "/health",
+    methods=["GET", "HEAD"],
+)
 async def health(request: Request):
 
     database = getattr(
