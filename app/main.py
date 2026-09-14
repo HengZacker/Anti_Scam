@@ -1,6 +1,5 @@
 import logging
 import os
-
 from contextlib import asynccontextmanager
 
 from fastapi import (
@@ -9,7 +8,6 @@ from fastapi import (
     HTTPException,
     Request,
 )
-
 from fastapi.responses import JSONResponse
 
 from telegram import (
@@ -18,14 +16,11 @@ from telegram import (
     BotCommandScopeAllPrivateChats,
     Update,
 )
-
 from telegram.ext import Application
 
 from .config import settings
 from .database import Database
-from .dashboard import (
-    router as dashboard_router,
-)
+from .dashboard import router as dashboard_router
 from .handlers import register_handlers
 
 
@@ -34,9 +29,7 @@ from .handlers import register_handlers
 # ============================================================
 
 logging.basicConfig(
-
     level=logging.INFO,
-
     format=(
         "%(asctime)s | "
         "%(levelname)s | "
@@ -45,10 +38,7 @@ logging.basicConfig(
     ),
 )
 
-
-logger = logging.getLogger(
-    "telegram-file-guard"
-)
+logger = logging.getLogger("telegram-file-guard")
 
 
 # ============================================================
@@ -58,16 +48,11 @@ logger = logging.getLogger(
 telegram_app = (
     Application
     .builder()
-    .token(
-        settings.bot_token
-    )
+    .token(settings.bot_token)
     .build()
 )
 
-
-register_handlers(
-    telegram_app
-)
+register_handlers(telegram_app)
 
 
 # ============================================================
@@ -75,38 +60,23 @@ register_handlers(
 # ============================================================
 
 def is_production() -> bool:
-
-    return (
-        settings.environment
-        in {
-            "production",
-            "render",
-        }
-    )
+    return settings.environment in {
+        "production",
+        "render",
+    }
 
 
 def get_external_url() -> str:
-
     if settings.render_external_url:
-
-        return (
-            settings.render_external_url
-            .rstrip("/")
-        )
-
+        return settings.render_external_url.rstrip("/")
 
     hostname = os.getenv(
         "RENDER_EXTERNAL_HOSTNAME",
         "",
     ).strip()
 
-
     if hostname:
-
-        return (
-            f"https://{hostname}"
-        )
-
+        return f"https://{hostname}"
 
     return ""
 
@@ -116,75 +86,55 @@ def get_external_url() -> str:
 # ============================================================
 
 async def setup_commands():
-
     private_commands = [
-
         BotCommand(
             "start",
             "Start File Guard",
         ),
-
         BotCommand(
             "help",
             "Show help",
         ),
-
         BotCommand(
             "stats",
             "Admin statistics",
         ),
-
         BotCommand(
             "groups",
             "Protected groups",
         ),
-
         BotCommand(
             "id",
             "Show Telegram ID",
         ),
     ]
 
-
     group_admin_commands = [
-
         BotCommand(
             "start",
             "Start File Guard",
         ),
-
         BotCommand(
             "help",
             "Show help",
         ),
-
         BotCommand(
             "id",
             "Show Telegram ID",
         ),
     ]
 
-
-    # Private chat menu.
+    # Private chat menu
     await telegram_app.bot.set_my_commands(
-
         private_commands,
-
-        scope=(
-            BotCommandScopeAllPrivateChats()
-        ),
+        scope=BotCommandScopeAllPrivateChats(),
     )
-
 
     # Telegram shows this menu only to
     # administrators of the group.
     await telegram_app.bot.set_my_commands(
-
         group_admin_commands,
-
-        scope=(
-            BotCommandScopeAllChatAdministrators()
-        ),
+        scope=BotCommandScopeAllChatAdministrators(),
     )
 
 
@@ -193,14 +143,10 @@ async def setup_commands():
 # ============================================================
 
 @asynccontextmanager
-async def lifespan(
-    app: FastAPI,
-):
-
+async def lifespan(app: FastAPI):
     logger.info(
         "Starting Telegram File Guard..."
     )
-
 
     # --------------------------------------------------------
     # DATABASE
@@ -210,32 +156,20 @@ async def lifespan(
         settings.database_url
     )
 
-
     await database.connect()
-
     await database.create_tables()
 
+    app.state.database = database
 
-    app.state.database = (
-        database
-    )
-
-
-    telegram_app.bot_data[
-        "database"
-    ] = database
-
+    telegram_app.bot_data["database"] = database
 
     # --------------------------------------------------------
     # TELEGRAM
     # --------------------------------------------------------
 
     await telegram_app.initialize()
-
     await telegram_app.start()
-
     await setup_commands()
-
 
     # ========================================================
     # LOCAL POLLING
@@ -247,22 +181,14 @@ async def lifespan(
             "Running in LOCAL POLLING mode."
         )
 
-
         await telegram_app.bot.delete_webhook(
-
             drop_pending_updates=True
         )
 
-
         await telegram_app.updater.start_polling(
-
-            allowed_updates=(
-                Update.ALL_TYPES
-            ),
-
+            allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
         )
-
 
     # ========================================================
     # RENDER WEBHOOK
@@ -274,55 +200,34 @@ async def lifespan(
             "Running in WEBHOOK mode."
         )
 
-
-        external_url = (
-            get_external_url()
-        )
-
+        external_url = get_external_url()
 
         if not external_url:
-
             raise RuntimeError(
-
                 "Set RENDER_EXTERNAL_URL "
                 "or use Render's "
                 "RENDER_EXTERNAL_HOSTNAME."
             )
-
 
         webhook_url = (
             f"{external_url}"
             "/telegram/webhook"
         )
 
-
         await telegram_app.bot.set_webhook(
-
             url=webhook_url,
-
-            secret_token=(
-                settings.webhook_secret
-            ),
-
-            allowed_updates=(
-                Update.ALL_TYPES
-            ),
-
+            secret_token=settings.webhook_secret,
+            allowed_updates=Update.ALL_TYPES,
             max_connections=(
                 settings.webhook_max_connections
             ),
-
             drop_pending_updates=False,
         )
 
-
         logger.info(
-
             "Telegram webhook configured: %s",
-
             webhook_url,
         )
-
 
     try:
 
@@ -333,7 +238,6 @@ async def lifespan(
         logger.info(
             "Shutting down Telegram File Guard..."
         )
-
 
         # ----------------------------------------------------
         # LOCAL SHUTDOWN
@@ -347,7 +251,6 @@ async def lifespan(
                     telegram_app.updater
                     and telegram_app.updater.running
                 ):
-
                     await (
                         telegram_app
                         .updater
@@ -360,7 +263,6 @@ async def lifespan(
                     "Error stopping polling."
                 )
 
-
         # ----------------------------------------------------
         # WEBHOOK SHUTDOWN
         # ----------------------------------------------------
@@ -370,7 +272,6 @@ async def lifespan(
             try:
 
                 await telegram_app.bot.delete_webhook(
-
                     drop_pending_updates=False
                 )
 
@@ -380,11 +281,13 @@ async def lifespan(
                     "Error deleting webhook."
                 )
 
+        # ----------------------------------------------------
+        # TELEGRAM SHUTDOWN
+        # ----------------------------------------------------
 
         try:
 
             if telegram_app.running:
-
                 await telegram_app.stop()
 
         except Exception:
@@ -392,7 +295,6 @@ async def lifespan(
             logger.exception(
                 "Error stopping Telegram application."
             )
-
 
         try:
 
@@ -404,9 +306,19 @@ async def lifespan(
                 "Error shutting down Telegram application."
             )
 
+        # ----------------------------------------------------
+        # DATABASE SHUTDOWN
+        # ----------------------------------------------------
 
-        await database.close()
+        try:
 
+            await database.close()
+
+        except Exception:
+
+            logger.exception(
+                "Error closing database."
+            )
 
         logger.info(
             "Shutdown complete."
@@ -418,11 +330,8 @@ async def lifespan(
 # ============================================================
 
 app = FastAPI(
-
     title="Telegram File Guard",
-
     version="4.0.0",
-
     lifespan=lifespan,
 )
 
@@ -433,20 +342,11 @@ app = FastAPI(
 
 @app.get("/")
 async def root():
-
     return {
-
-        "name":
-            "Telegram File Guard",
-
-        "version":
-            "4.0.0",
-
-        "status":
-            "running",
-
-        "environment":
-            settings.environment,
+        "name": "Telegram File Guard",
+        "version": "4.0.0",
+        "status": "running",
+        "environment": settings.environment,
     }
 
 
@@ -455,30 +355,69 @@ async def root():
 # ============================================================
 
 @app.get("/health")
-async def health(
-    request: Request,
-):
+async def health(request: Request):
 
     database = getattr(
-
         request.app.state,
-
         "database",
-
         None,
     )
 
+    # Database was never initialized
+    if database is None:
 
-    db_ok = False
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "database": "not_initialized",
+                "telegram": "unknown",
+            },
+        )
 
+    # --------------------------------------------------------
+    # Check database connection
+    # --------------------------------------------------------
 
     try:
 
-        if database:
+        # The Database class in this project does not
+        # currently expose a ping() method.
+        #
+        # Instead, check the underlying asyncpg pool.
+        pool = getattr(
+            database,
+            "pool",
+            None,
+        )
 
-            db_ok = (
-                await database.ping()
+        if pool is None:
+
+            logger.error(
+                "Database pool is not available."
             )
+
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "degraded",
+                    "database": "pool_unavailable",
+                    "telegram": (
+                        "running"
+                        if telegram_app.running
+                        else "stopped"
+                    ),
+                },
+            )
+
+        # Execute a lightweight PostgreSQL query.
+        async with pool.acquire() as connection:
+
+            await connection.fetchval(
+                "SELECT 1"
+            )
+
+        db_ok = True
 
     except Exception:
 
@@ -486,33 +425,39 @@ async def health(
             "Health check failed."
         )
 
+        db_ok = False
+
+    # --------------------------------------------------------
+    # Database unavailable
+    # --------------------------------------------------------
 
     if not db_ok:
 
         return JSONResponse(
-
-            {
-                "status":
-                    "degraded",
-
-                "database":
-                    "offline",
-            },
-
             status_code=503,
+            content={
+                "status": "degraded",
+                "database": "offline",
+                "telegram": (
+                    "running"
+                    if telegram_app.running
+                    else "stopped"
+                ),
+            },
         )
 
+    # --------------------------------------------------------
+    # Everything is healthy
+    # --------------------------------------------------------
 
     return {
-
-        "status":
-            "ok",
-
-        "database":
-            "connected",
-
-        "telegram":
-            "running",
+        "status": "ok",
+        "database": "connected",
+        "telegram": (
+            "running"
+            if telegram_app.running
+            else "stopped"
+        ),
     }
 
 
@@ -522,27 +467,21 @@ async def health(
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(
-
     request: Request,
-
-    x_telegram_bot_api_secret_token:
-        str | None = Header(
-            default=None
-        ),
+    x_telegram_bot_api_secret_token: str | None = Header(
+        default=None
+    ),
 ):
 
     if not is_production():
 
         raise HTTPException(
-
             status_code=404,
-
             detail=(
                 "Webhook is disabled "
                 "in local mode."
             ),
         )
-
 
     if (
         x_telegram_bot_api_secret_token
@@ -550,32 +489,24 @@ async def telegram_webhook(
     ):
 
         raise HTTPException(
-
             status_code=403,
-
             detail=(
                 "Invalid webhook secret."
             ),
         )
 
-
     try:
 
         data = await request.json()
 
-
         update = Update.de_json(
-
             data,
-
             telegram_app.bot,
         )
-
 
         await telegram_app.update_queue.put(
             update
         )
-
 
     except Exception:
 
@@ -584,14 +515,11 @@ async def telegram_webhook(
         )
 
         raise HTTPException(
-
             status_code=400,
-
             detail=(
                 "Invalid Telegram update."
             ),
         )
-
 
     return JSONResponse(
         {
