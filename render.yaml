@@ -2,16 +2,16 @@ services:
   - type: web
     name: telegram-file-guard
     runtime: python
-    region: singapore
-    plan: free
 
     buildCommand: pip install -r requirements.txt
 
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
-    healthCheckPath: /health
-
     envVars:
+
+      - key: ENVIRONMENT
+        value: production
+
       - key: BOT_TOKEN
         sync: false
 
@@ -27,11 +27,17 @@ services:
       - key: WEBHOOK_SECRET
         sync: false
 
+      - key: RENDER_EXTERNAL_URL
+        sync: false
+
       - key: DELETE_ENABLED
         value: "true"
 
       - key: ALERT_ADMINS
         value: "true"
 
+      - key: WEBHOOK_MAX_CONNECTIONS
+        value: "40"
+
       - key: BLOCKED_EXTENSIONS
-        value: ".exe,.bat,.vbs,.ps1,.sh,.msi,.scr"
+        sync: false

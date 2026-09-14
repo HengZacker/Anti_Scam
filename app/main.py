@@ -1,309 +1,609 @@
+import logging
 import os
+
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+)
+
 from fastapi.responses import JSONResponse
-from telegram import Update
+
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllPrivateChats,
+    Update,
+)
+
 from telegram.ext import Application
 
 from .config import settings
 from .database import Database
-from .dashboard import router as dashboard_router
+from .dashboard import (
+    router as dashboard_router,
+)
 from .handlers import register_handlers
 
 
 # ============================================================
-# Telegram Application
+# LOGGING
 # ============================================================
 
-telegram_app: Application = (
-    Application.builder()
-    .token(settings.bot_token)
+logging.basicConfig(
+
+    level=logging.INFO,
+
+    format=(
+        "%(asctime)s | "
+        "%(levelname)s | "
+        "%(name)s | "
+        "%(message)s"
+    ),
+)
+
+
+logger = logging.getLogger(
+    "telegram-file-guard"
+)
+
+
+# ============================================================
+# TELEGRAM APPLICATION
+# ============================================================
+
+telegram_app = (
+    Application
+    .builder()
+    .token(
+        settings.bot_token
+    )
     .build()
 )
 
-register_handlers(telegram_app)
+
+register_handlers(
+    telegram_app
+)
 
 
 # ============================================================
-# Helper: Determine Running Mode
+# ENVIRONMENT
 # ============================================================
 
 def is_production() -> bool:
-    """
-    Production mode is used on Render.
 
-    ENVIRONMENT=production
-    or
-    ENVIRONMENT is not explicitly set and Render provides
-    RENDER_EXTERNAL_URL.
-    """
+    return (
+        settings.environment
+        in {
+            "production",
+            "render",
+        }
+    )
 
-    environment = os.getenv("ENVIRONMENT", "").strip().lower()
 
-    if environment == "production":
-        return True
+def get_external_url() -> str:
 
-    if environment == "local":
-        return False
+    if settings.render_external_url:
 
-    return bool(os.getenv("RENDER_EXTERNAL_URL"))
+        return (
+            settings.render_external_url
+            .rstrip("/")
+        )
+
+
+    hostname = os.getenv(
+        "RENDER_EXTERNAL_HOSTNAME",
+        "",
+    ).strip()
+
+
+    if hostname:
+
+        return (
+            f"https://{hostname}"
+        )
+
+
+    return ""
 
 
 # ============================================================
-# Lifespan
+# COMMAND MENU
+# ============================================================
+
+async def setup_commands():
+
+    private_commands = [
+
+        BotCommand(
+            "start",
+            "Start File Guard",
+        ),
+
+        BotCommand(
+            "help",
+            "Show help",
+        ),
+
+        BotCommand(
+            "stats",
+            "Admin statistics",
+        ),
+
+        BotCommand(
+            "groups",
+            "Protected groups",
+        ),
+
+        BotCommand(
+            "id",
+            "Show Telegram ID",
+        ),
+    ]
+
+
+    group_admin_commands = [
+
+        BotCommand(
+            "start",
+            "Start File Guard",
+        ),
+
+        BotCommand(
+            "help",
+            "Show help",
+        ),
+
+        BotCommand(
+            "id",
+            "Show Telegram ID",
+        ),
+    ]
+
+
+    # Private chat menu.
+    await telegram_app.bot.set_my_commands(
+
+        private_commands,
+
+        scope=(
+            BotCommandScopeAllPrivateChats()
+        ),
+    )
+
+
+    # Telegram shows this menu only to
+    # administrators of the group.
+    await telegram_app.bot.set_my_commands(
+
+        group_admin_commands,
+
+        scope=(
+            BotCommandScopeAllChatAdministrators()
+        ),
+    )
+
+
+# ============================================================
+# LIFESPAN
 # ============================================================
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(
+    app: FastAPI,
+):
 
-    database = Database(settings.database_url)
+    logger.info(
+        "Starting Telegram File Guard..."
+    )
+
 
     # --------------------------------------------------------
-    # Connect to Neon PostgreSQL
+    # DATABASE
     # --------------------------------------------------------
+
+    database = Database(
+        settings.database_url
+    )
+
 
     await database.connect()
 
-    app.state.database = database
+    await database.create_tables()
 
-    # Make database available to Telegram handlers
-    telegram_app.bot_data["database"] = database
+
+    app.state.database = (
+        database
+    )
+
+
+    telegram_app.bot_data[
+        "database"
+    ] = database
+
 
     # --------------------------------------------------------
-    # Initialize Telegram Application
+    # TELEGRAM
     # --------------------------------------------------------
 
     await telegram_app.initialize()
+
     await telegram_app.start()
 
+    await setup_commands()
+
+
     # ========================================================
-    # LOCAL MODE
+    # LOCAL POLLING
     # ========================================================
 
     if not is_production():
 
-        print("========================================")
-        print(" Telegram File Guard")
-        print(" MODE: LOCAL / POLLING")
-        print(" Database: Neon PostgreSQL")
-        print("========================================")
+        logger.info(
+            "Running in LOCAL POLLING mode."
+        )
 
-        # Remove any existing webhook so polling can work
+
         await telegram_app.bot.delete_webhook(
+
             drop_pending_updates=True
         )
 
-        # Start polling
+
         await telegram_app.updater.start_polling(
-            allowed_updates=Update.ALL_TYPES,
+
+            allowed_updates=(
+                Update.ALL_TYPES
+            ),
+
             drop_pending_updates=True,
         )
 
-        print("Telegram polling started.")
-        print("Bot is ready.")
 
     # ========================================================
-    # PRODUCTION MODE
+    # RENDER WEBHOOK
     # ========================================================
 
     else:
 
-        render_url = settings.render_external_url
+        logger.info(
+            "Running in WEBHOOK mode."
+        )
 
-        if not render_url:
-            hostname = os.getenv(
-                "RENDER_EXTERNAL_HOSTNAME",
-                ""
-            ).strip()
 
-            if hostname:
-                render_url = f"https://{hostname}"
+        external_url = (
+            get_external_url()
+        )
 
-        if not render_url:
+
+        if not external_url:
+
             raise RuntimeError(
-                "RENDER_EXTERNAL_URL or "
-                "RENDER_EXTERNAL_HOSTNAME is required "
-                "in production."
+
+                "Set RENDER_EXTERNAL_URL "
+                "or use Render's "
+                "RENDER_EXTERNAL_HOSTNAME."
             )
 
+
         webhook_url = (
-            f"{render_url.rstrip('/')}"
+            f"{external_url}"
             "/telegram/webhook"
         )
 
-        print("========================================")
-        print(" Telegram File Guard")
-        print(" MODE: PRODUCTION / WEBHOOK")
-        print(" Database: Neon PostgreSQL")
-        print(f" Webhook: {webhook_url}")
-        print("========================================")
 
         await telegram_app.bot.set_webhook(
+
             url=webhook_url,
-            secret_token=settings.webhook_secret,
-            allowed_updates=Update.ALL_TYPES,
+
+            secret_token=(
+                settings.webhook_secret
+            ),
+
+            allowed_updates=(
+                Update.ALL_TYPES
+            ),
+
+            max_connections=(
+                settings.webhook_max_connections
+            ),
+
             drop_pending_updates=False,
-            max_connections=settings.max_connections,
         )
 
-        print("Telegram webhook configured.")
-        print("Bot is ready.")
 
-    # --------------------------------------------------------
-    # Application Running
-    # --------------------------------------------------------
+        logger.info(
+
+            "Telegram webhook configured: %s",
+
+            webhook_url,
+        )
+
 
     try:
+
         yield
 
     finally:
 
-        print("Shutting down Telegram File Guard...")
+        logger.info(
+            "Shutting down Telegram File Guard..."
+        )
 
-        # ====================================================
-        # LOCAL MODE SHUTDOWN
-        # ====================================================
+
+        # ----------------------------------------------------
+        # LOCAL SHUTDOWN
+        # ----------------------------------------------------
 
         if not is_production():
 
-            if telegram_app.updater.running:
-                await telegram_app.updater.stop()
+            try:
 
-        # ====================================================
-        # IMPORTANT:
-        #
-        # We intentionally DO NOT delete the webhook here
-        # in production.
-        #
-        # During a Render deployment, deleting the webhook
-        # from the old instance could interfere with the new
-        # instance.
-        # ====================================================
+                if (
+                    telegram_app.updater
+                    and telegram_app.updater.running
+                ):
 
-        await telegram_app.stop()
-        await telegram_app.shutdown()
+                    await (
+                        telegram_app
+                        .updater
+                        .stop()
+                    )
+
+            except Exception:
+
+                logger.exception(
+                    "Error stopping polling."
+                )
+
+
+        # ----------------------------------------------------
+        # WEBHOOK SHUTDOWN
+        # ----------------------------------------------------
+
+        else:
+
+            try:
+
+                await telegram_app.bot.delete_webhook(
+
+                    drop_pending_updates=False
+                )
+
+            except Exception:
+
+                logger.exception(
+                    "Error deleting webhook."
+                )
+
+
+        try:
+
+            if telegram_app.running:
+
+                await telegram_app.stop()
+
+        except Exception:
+
+            logger.exception(
+                "Error stopping Telegram application."
+            )
+
+
+        try:
+
+            await telegram_app.shutdown()
+
+        except Exception:
+
+            logger.exception(
+                "Error shutting down Telegram application."
+            )
+
 
         await database.close()
 
-        print("Shutdown complete.")
+
+        logger.info(
+            "Shutdown complete."
+        )
 
 
 # ============================================================
-# FastAPI Application
+# FASTAPI
 # ============================================================
 
 app = FastAPI(
+
     title="Telegram File Guard",
-    description="Telegram group file security and moderation bot",
-    version="2.0.0",
+
+    version="4.0.0",
+
     lifespan=lifespan,
 )
 
 
 # ============================================================
-# Dashboard Routes
-# ============================================================
-
-app.include_router(dashboard_router)
-
-
-# ============================================================
-# Root
+# ROOT
 # ============================================================
 
 @app.get("/")
 async def root():
+
     return {
-        "name": "Telegram File Guard",
-        "version": "2.0.0",
-        "status": "running",
-        "mode": (
-            "production"
-            if is_production()
-            else "local"
-        ),
+
+        "name":
+            "Telegram File Guard",
+
+        "version":
+            "4.0.0",
+
+        "status":
+            "running",
+
+        "environment":
+            settings.environment,
     }
 
 
 # ============================================================
-# Health Check
+# HEALTH
 # ============================================================
 
 @app.get("/health")
-async def health():
+async def health(
+    request: Request,
+):
+
+    database = getattr(
+
+        request.app.state,
+
+        "database",
+
+        None,
+    )
+
+
+    db_ok = False
+
+
+    try:
+
+        if database:
+
+            db_ok = (
+                await database.ping()
+            )
+
+    except Exception:
+
+        logger.exception(
+            "Health check failed."
+        )
+
+
+    if not db_ok:
+
+        return JSONResponse(
+
+            {
+                "status":
+                    "degraded",
+
+                "database":
+                    "offline",
+            },
+
+            status_code=503,
+        )
+
+
     return {
-        "status": "ok",
-        "service": "telegram-file-guard",
+
+        "status":
+            "ok",
+
+        "database":
+            "connected",
+
+        "telegram":
+            "running",
     }
 
 
 # ============================================================
-# Telegram Webhook
+# WEBHOOK
 # ============================================================
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(
+
     request: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(
-        default=None
-    ),
+
+    x_telegram_bot_api_secret_token:
+        str | None = Header(
+            default=None
+        ),
 ):
 
-    # --------------------------------------------------------
-    # Webhook should only be used in production
-    # --------------------------------------------------------
-
     if not is_production():
+
         raise HTTPException(
+
             status_code=404,
-            detail="Webhook is disabled in local mode.",
+
+            detail=(
+                "Webhook is disabled "
+                "in local mode."
+            ),
         )
 
-    # --------------------------------------------------------
-    # Verify Telegram Webhook Secret
-    # --------------------------------------------------------
 
     if (
-        not x_telegram_bot_api_secret_token
-        or x_telegram_bot_api_secret_token
+        x_telegram_bot_api_secret_token
         != settings.webhook_secret
     ):
+
         raise HTTPException(
+
             status_code=403,
-            detail="Invalid webhook secret.",
+
+            detail=(
+                "Invalid webhook secret."
+            ),
         )
 
-    # --------------------------------------------------------
-    # Read Telegram Update
-    # --------------------------------------------------------
 
     try:
+
         data = await request.json()
 
+
         update = Update.de_json(
+
             data,
+
             telegram_app.bot,
         )
 
-    except Exception as exc:
-        print(
-            f"Failed to parse Telegram update: {exc}"
+
+        await telegram_app.update_queue.put(
+            update
+        )
+
+
+    except Exception:
+
+        logger.exception(
+            "Failed to process webhook update."
         )
 
         raise HTTPException(
+
             status_code=400,
-            detail="Invalid Telegram update.",
+
+            detail=(
+                "Invalid Telegram update."
+            ),
         )
 
-    # --------------------------------------------------------
-    # Send Update to Telegram Application
-    # --------------------------------------------------------
-
-    await telegram_app.update_queue.put(update)
 
     return JSONResponse(
         {
             "ok": True
         }
     )
+
+
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+app.include_router(
+    dashboard_router
+)

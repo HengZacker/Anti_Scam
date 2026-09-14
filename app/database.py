@@ -1,48 +1,84 @@
-from datetime import datetime, timezone
+import logging
 from typing import Any
 
-from psycopg_pool import AsyncConnectionPool
+import asyncpg
+
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
-
-    def __init__(self, database_url: str):
+    def __init__(
+        self,
+        database_url: str,
+    ):
         self.database_url = database_url
+        self.pool: asyncpg.Pool | None = None
 
-        self.pool: AsyncConnectionPool | None = None
+    # ========================================================
+    # CONNECTION
+    # ========================================================
 
     async def connect(self):
-
-        self.pool = AsyncConnectionPool(
-            conninfo=self.database_url,
+        self.pool = await asyncpg.create_pool(
+            dsn=self.database_url,
             min_size=1,
             max_size=5,
-            open=False,
+            command_timeout=30,
         )
 
-        await self.pool.open()
-
-        await self.create_tables()
+        logger.info(
+            "Connected to PostgreSQL."
+        )
 
     async def close(self):
-
         if self.pool:
             await self.pool.close()
+            self.pool = None
+
+            logger.info(
+                "Database connection closed."
+            )
+
+    def _require_pool(self):
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool is not connected."
+            )
+
+        return self.pool
+
+    # ========================================================
+    # TABLES
+    # ========================================================
 
     async def create_tables(self):
+        pool = self._require_pool()
 
-        if not self.pool:
-            raise RuntimeError("Database not connected.")
+        async with pool.acquire() as conn:
 
-        async with self.pool.connection() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS protected_groups (
+                    chat_id BIGINT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    username TEXT,
+                    chat_type TEXT NOT NULL,
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_activity TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                """
+            )
 
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS deletion_events (
                     id BIGSERIAL PRIMARY KEY,
 
-                    telegram_message_id BIGINT,
-                    telegram_chat_id BIGINT NOT NULL,
+                    message_id BIGINT NOT NULL,
+                    chat_id BIGINT NOT NULL,
 
                     group_title TEXT,
                     group_username TEXT,
@@ -55,12 +91,20 @@ class Database:
                     file_name TEXT NOT NULL,
                     file_extension TEXT NOT NULL,
 
-                    reason TEXT NOT NULL,
+                    reason TEXT,
 
                     deleted_successfully BOOLEAN NOT NULL DEFAULT FALSE,
 
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+                """
+            )
+
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_deletion_events_chat_id
+                ON deletion_events(chat_id);
                 """
             )
 
@@ -75,12 +119,147 @@ class Database:
             await conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS
-                idx_deletion_events_chat_id
-                ON deletion_events(telegram_chat_id);
+                idx_deletion_events_extension
+                ON deletion_events(file_extension);
                 """
             )
 
-            await conn.commit()
+        logger.info(
+            "Database tables ready."
+        )
+
+    # ========================================================
+    # GROUP TRACKING
+    # ========================================================
+
+    async def upsert_group(
+        self,
+        chat_id: int,
+        title: str,
+        username: str | None,
+        chat_type: str,
+    ):
+        pool = self._require_pool()
+
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO protected_groups (
+                    chat_id,
+                    title,
+                    username,
+                    chat_type,
+                    active,
+                    first_seen,
+                    last_activity,
+                    updated_at
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    TRUE,
+                    NOW(),
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (chat_id)
+                DO UPDATE SET
+                    title = EXCLUDED.title,
+                    username = EXCLUDED.username,
+                    chat_type = EXCLUDED.chat_type,
+                    active = TRUE,
+                    last_activity = NOW(),
+                    updated_at = NOW();
+                """,
+                chat_id,
+                title,
+                username,
+                chat_type,
+            )
+
+    async def touch_group(
+        self,
+        chat_id: int,
+    ):
+        pool = self._require_pool()
+
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE protected_groups
+                SET
+                    last_activity = NOW(),
+                    updated_at = NOW(),
+                    active = TRUE
+                WHERE chat_id = $1
+                """,
+                chat_id,
+            )
+
+    async def deactivate_group(
+        self,
+        chat_id: int,
+    ):
+        pool = self._require_pool()
+
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE protected_groups
+                SET
+                    active = FALSE,
+                    updated_at = NOW()
+                WHERE chat_id = $1
+                """,
+                chat_id,
+            )
+
+    async def delete_group(
+        self,
+        chat_id: int,
+    ):
+        pool = self._require_pool()
+
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                DELETE FROM protected_groups
+                WHERE chat_id = $1
+                """,
+                chat_id,
+            )
+
+    async def get_groups(
+        self,
+    ) -> list[dict[str, Any]]:
+        pool = self._require_pool()
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    chat_id,
+                    title,
+                    username,
+                    chat_type,
+                    first_seen,
+                    last_activity
+                FROM protected_groups
+                WHERE active = TRUE
+                ORDER BY title ASC
+                """
+            )
+
+        return [
+            dict(row)
+            for row in rows
+        ]
+
+    # ========================================================
+    # DELETION LOG
+    # ========================================================
 
     async def record_deletion(
         self,
@@ -98,17 +277,14 @@ class Database:
         reason: str,
         deleted_successfully: bool,
     ):
+        pool = self._require_pool()
 
-        if not self.pool:
-            raise RuntimeError("Database not connected.")
-
-        async with self.pool.connection() as conn:
-
+        async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO deletion_events (
-                    telegram_message_id,
-                    telegram_chat_id,
+                    message_id,
+                    chat_id,
                     group_title,
                     group_username,
                     user_id,
@@ -121,46 +297,54 @@ class Database:
                     deleted_successfully
                 )
                 VALUES (
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s,
-                    %s, %s
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    $10,
+                    $11,
+                    $12
                 )
                 """,
-                (
-                    message_id,
-                    chat_id,
-                    group_title,
-                    group_username,
-                    user_id,
-                    username,
-                    first_name,
-                    last_name,
-                    file_name,
-                    file_extension,
-                    reason,
-                    deleted_successfully,
-                ),
+                message_id,
+                chat_id,
+                group_title,
+                group_username,
+                user_id,
+                username,
+                first_name,
+                last_name,
+                file_name,
+                file_extension,
+                reason,
+                deleted_successfully,
             )
 
-            await conn.commit()
+    # ========================================================
+    # STATISTICS
+    # ========================================================
 
-    async def get_stats(self) -> dict[str, Any]:
+    async def get_stats(
+        self,
+    ) -> dict[str, int]:
 
-        if not self.pool:
-            raise RuntimeError("Database not connected.")
+        pool = self._require_pool()
 
-        async with self.pool.connection() as conn:
+        async with pool.acquire() as conn:
 
-            total = await conn.execute(
+            total = await conn.fetchval(
                 """
                 SELECT COUNT(*)
                 FROM deletion_events
                 """
             )
 
-            total_row = await total.fetchone()
-
-            successful = await conn.execute(
+            successful = await conn.fetchval(
                 """
                 SELECT COUNT(*)
                 FROM deletion_events
@@ -168,9 +352,7 @@ class Database:
                 """
             )
 
-            successful_row = await successful.fetchone()
-
-            failed = await conn.execute(
+            failed = await conn.fetchval(
                 """
                 SELECT COUNT(*)
                 FROM deletion_events
@@ -178,18 +360,15 @@ class Database:
                 """
             )
 
-            failed_row = await failed.fetchone()
-
-            groups = await conn.execute(
+            groups = await conn.fetchval(
                 """
-                SELECT COUNT(DISTINCT telegram_chat_id)
-                FROM deletion_events
+                SELECT COUNT(*)
+                FROM protected_groups
+                WHERE active = TRUE
                 """
             )
 
-            groups_row = await groups.fetchone()
-
-            users = await conn.execute(
+            users = await conn.fetchval(
                 """
                 SELECT COUNT(DISTINCT user_id)
                 FROM deletion_events
@@ -197,9 +376,7 @@ class Database:
                 """
             )
 
-            users_row = await users.fetchone()
-
-            today = await conn.execute(
+            today = await conn.fetchval(
                 """
                 SELECT COUNT(*)
                 FROM deletion_events
@@ -207,76 +384,53 @@ class Database:
                 """
             )
 
-            today_row = await today.fetchone()
+        return {
+            "total": int(total or 0),
+            "successful": int(successful or 0),
+            "failed": int(failed or 0),
+            "groups": int(groups or 0),
+            "users": int(users or 0),
+            "today": int(today or 0),
+        }
 
-            return {
-                "total": total_row[0],
-                "successful": successful_row[0],
-                "failed": failed_row[0],
-                "groups": groups_row[0],
-                "users": users_row[0],
-                "today": today_row[0],
-            }
+    # ========================================================
+    # CLEAR STATISTICS
+    # ========================================================
 
-    async def get_recent_events(
-        self,
-        limit: int = 50,
-    ):
+    async def clear_statistics(self) -> int:
+        """
+        Delete all deletion history.
 
-        if not self.pool:
-            raise RuntimeError("Database not connected.")
+        IMPORTANT:
+        - deletion_events WILL be cleared.
+        - protected_groups WILL NOT be touched.
+        - Bot group tracking will remain intact.
 
-        limit = max(
-            1,
-            min(limit, 200),
-        )
+        Returns:
+            Number of deletion records removed.
+        """
 
-        async with self.pool.connection() as conn:
+        pool = self._require_pool()
 
-            cursor = await conn.execute(
+        async with pool.acquire() as conn:
+
+            deleted_count = await conn.fetchval(
                 """
-                SELECT
-                    id,
-                    telegram_message_id,
-                    telegram_chat_id,
-                    group_title,
-                    group_username,
-                    user_id,
-                    username,
-                    first_name,
-                    last_name,
-                    file_name,
-                    file_extension,
-                    reason,
-                    deleted_successfully,
-                    created_at
+                SELECT COUNT(*)
                 FROM deletion_events
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (limit,),
+                """
             )
 
-            rows = await cursor.fetchall()
+            await conn.execute(
+                """
+                TRUNCATE TABLE deletion_events
+                RESTART IDENTITY
+                """
+            )
 
-            columns = [
-                "id",
-                "telegram_message_id",
-                "telegram_chat_id",
-                "group_title",
-                "group_username",
-                "user_id",
-                "username",
-                "first_name",
-                "last_name",
-                "file_name",
-                "file_extension",
-                "reason",
-                "deleted_successfully",
-                "created_at",
-            ]
+        logger.warning(
+            "Statistics cleared. %s deletion events removed.",
+            deleted_count,
+        )
 
-            return [
-                dict(zip(columns, row))
-                for row in rows
-            ]
+        return int(deleted_count or 0)

@@ -1,72 +1,56 @@
-# 🛡️ Telegram File Guard
+# Telegram File Guard
 
 Telegram security bot that automatically detects and deletes
-dangerous executable/script files from Telegram groups.
-
-## Blocked extensions
-
-- .exe
-- .bat
-- .vbs
-- .ps1
-- .sh
-- .msi
-- .scr
+blocked file extensions from Telegram groups.
 
 ## Features
 
 - Automatic file deletion
-- Group monitoring
+- Dangerous extension detection
+- Double-extension detection
 - Admin alerts
-- PostgreSQL logging
+- Neon PostgreSQL
 - Statistics
-- Web dashboard
-- Telegram webhook
-- Render support
-- Health check
-- Environment variable configuration
+- Protected group tracking
+- Automatic group removal when bot leaves
+- Render webhook
+- Local polling
+- FastAPI health endpoint
+- Dashboard endpoint
 
 ## Commands
 
 /start
-
 /help
-
 /stats
+/groups
+/id
 
-## Dashboard
-
-/dashboard?token=YOUR_DASHBOARD_TOKEN
-
-## Local development
+## Local
 
 Create virtual environment:
 
 python -m venv .venv
 
-Activate on Windows:
+Activate:
 
-.venv\Scripts\activate
-
-Activate on macOS/Linux:
+macOS/Linux:
 
 source .venv/bin/activate
+
+Windows:
+
+.venv\Scripts\activate
 
 Install:
 
 pip install -r requirements.txt
 
-Copy environment example:
-
-cp .env.example .env
-
 Run:
 
-uvicorn app.main:app --reload --port 10000
+uvicorn app.main:app --reload
 
 ## Render
-
-Deploy as a Web Service.
 
 Build:
 
@@ -75,7 +59,3 @@ pip install -r requirements.txt
 Start:
 
 uvicorn app.main:app --host 0.0.0.0 --port $PORT
-
-Health check:
-
-/health
