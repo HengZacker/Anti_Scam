@@ -470,6 +470,7 @@ async def telegram_webhook(
         default=None
     ),
 ):
+    logger.warning("🔥 TELEGRAM WEBHOOK RECEIVED")
 
     if not is_production():
 

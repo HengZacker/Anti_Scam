@@ -579,6 +579,7 @@ async def help_command(
 # DOCUMENT HANDLER
 # ============================================================
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.warning("🔥 DOCUMENT HANDLER TRIGGERED")
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
@@ -588,12 +589,21 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Only monitor groups
     if chat.type not in {"group", "supergroup"}:
+        logger.warning("❌ No message or chat in update")
         return
 
     filename = get_filename(update)
 
     if not filename:
+        logger.warning("❌ No filename found in message")
         return
+    
+    logger.warning(
+        "📩 MESSAGE RECEIVED | Chat=%s | Type=%s | User=%s",
+        chat.id,
+        chat.type,
+        user.id if user else "Unknown",
+    )
 
     # Check blocked extension
     if not is_blocked_filename(
