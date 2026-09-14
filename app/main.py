@@ -214,21 +214,26 @@ async def lifespan(app: FastAPI):
             "/telegram/webhook"
         )
 
-        await telegram_app.bot.set_webhook(
+        webhook_result = await telegram_app.bot.set_webhook(
             url=webhook_url,
             secret_token=settings.webhook_secret,
             allowed_updates=Update.ALL_TYPES,
-            max_connections=(
-                settings.webhook_max_connections
-            ),
+            max_connections=settings.webhook_max_connections,
             drop_pending_updates=False,
         )
 
         logger.info(
-            "Telegram webhook configured: %s",
-            webhook_url,
+            "Telegram webhook configured: %s | result=%s",
+        webhook_url,
+        webhook_result,
         )
 
+        webhook_info = await telegram_app.bot.get_webhook_info()
+        logger.info(
+            "Telegram webhook status: url=%s | pending_updates=%s",
+            webhook_info.url,
+            webhook_info.pending_update_count,
+        )
     try:
 
         yield
