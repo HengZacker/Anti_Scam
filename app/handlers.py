@@ -1,7 +1,9 @@
 import logging
+from html import escape
 
 from telegram import Update
-from telegram.constants import ChatType
+from telegram.constants import ChatMemberStatus, ChatType
+from telegram.error import TelegramError
 from telegram.ext import (
     CommandHandler,
     ContextTypes,
@@ -15,7 +17,6 @@ from .filters import (
     get_extension,
     is_blocked_filename,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -37,16 +38,23 @@ def get_filename(update: Update) -> str | None:
 
 
 def is_admin(update: Update) -> bool:
-    """
-    Check whether the user is one of the configured bot admins.
-    """
-
     user = update.effective_user
 
     if not user:
         return False
 
     return user.id in settings.admin_ids
+
+
+def get_database(context: ContextTypes.DEFAULT_TYPE) -> Database:
+    database = context.application.bot_data.get("database")
+
+    if not database:
+        raise RuntimeError(
+            "Database is not available in bot_data."
+        )
+
+    return database
 
 
 # ============================================================
@@ -64,8 +72,24 @@ async def send_admin_alert(
     user_id: int | None,
     deleted: bool,
 ):
+    """
+    Send a security alert to every configured admin.
+    """
+
+    if not settings.alert_admins:
+        logger.warning(
+            "Admin alerts are disabled because ALERT_ADMINS is false."
+        )
+        return
+
+    if not settings.admin_ids:
+        logger.error(
+            "ADMIN_IDS is empty. Cannot send admin security alert."
+        )
+        return
+
     status = (
-        "✅ DELETED"
+        "✅ DELETED SUCCESSFULLY"
         if deleted
         else "❌ DELETE FAILED"
     )
@@ -73,18 +97,17 @@ async def send_admin_alert(
     text = (
         "🛡️ <b>Telegram File Guard Alert</b>\n\n"
         f"<b>Status:</b> {status}\n"
-        f"<b>File:</b> <code>{filename}</code>\n"
-        f"<b>Extension:</b> <code>{extension}</code>\n\n"
-        f"<b>Group:</b> {group_title}\n"
+        f"<b>File:</b> <code>{escape(filename)}</code>\n"
+        f"<b>Extension:</b> <code>{escape(extension)}</code>\n\n"
+        f"<b>Group:</b> {escape(group_title)}\n"
         f"<b>Group ID:</b> <code>{group_id}</code>\n\n"
-        f"<b>User:</b> {username}\n"
+        f"<b>User:</b> {escape(username)}\n"
         f"<b>User ID:</b> "
         f"<code>{user_id if user_id else 'Unknown'}</code>\n\n"
         "⚠️ This file type is blocked by the security policy."
     )
 
     for admin_id in settings.admin_ids:
-
         try:
             await context.bot.send_message(
                 chat_id=admin_id,
@@ -92,239 +115,463 @@ async def send_admin_alert(
                 parse_mode="HTML",
             )
 
+            logger.info(
+                "Security alert sent successfully | "
+                "Admin: %s | File: %s | Group: %s",
+                admin_id,
+                filename,
+                group_title,
+            )
+
+        except TelegramError as exc:
+            logger.error(
+                "FAILED to send security alert | "
+                "Admin: %s | File: %s | Error: %s",
+                admin_id,
+                filename,
+                exc,
+            )
+
         except Exception:
             logger.exception(
-                "Could not send admin alert to %s",
+                "Unexpected error while sending security alert "
+                "to admin %s",
                 admin_id,
             )
 
 
 # ============================================================
-# /START
+# GROUP TRACKING
+# ============================================================
+
+async def track_group_activity(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """
+    Automatically register/update groups where the bot receives
+    messages.
+    """
+
+    chat = update.effective_chat
+
+    if not chat:
+        return
+
+    if chat.type not in {
+        ChatType.GROUP,
+        ChatType.SUPERGROUP,
+    }:
+        return
+
+    try:
+        database = get_database(context)
+
+        await database.upsert_group(
+            chat_id=chat.id,
+            title=chat.title or "Unknown Group",
+            username=chat.username,
+            chat_type=chat.type,
+        )
+
+        logger.debug(
+            "Tracked group activity: %s (%s)",
+            chat.title,
+            chat.id,
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to track group activity for %s",
+            chat.id,
+        )
+
+
+# ============================================================
+# START
 # ============================================================
 
 async def start_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    message = update.effective_message
+    user = update.effective_user
 
-    if not message:
+    if not user:
         return
 
-    await message.reply_text(
-        "🛡️ <b>Telegram File Guard</b>\n\n"
-        "ខ្ញុំជួយការពារ Group ពី File ដែលអាចមានគ្រោះថ្នាក់។\n\n"
-        "🚫 File ដែលត្រូវបាន Block:\n"
-        "• .exe\n"
-        "• .bat\n"
-        "• .vbs\n"
-        "• .ps1\n"
-        "• .sh\n"
-        "• .msi\n"
-        "• .scr\n\n"
-        "សូមបន្ថែម Bot ជា Admin "
-        "ដើម្បីឲ្យខ្ញុំអាចលុប File បាន។",
+    if update.effective_chat.type == ChatType.PRIVATE:
+        await update.effective_message.reply_text(
+            "🛡️ Telegram File Guard\n\n"
+            "I protect Telegram groups by automatically "
+            "deleting blocked file types.\n\n"
+            "🔐 Security features:\n"
+            "• Automatic blocked-file deletion\n"
+            "• Admin security alerts\n"
+            "• Deletion statistics\n"
+            "• Group monitoring\n\n"
+            "Use /help to see available commands."
+        )
+
+    else:
+        await update.effective_message.reply_text(
+            "🛡️ Telegram File Guard is active in this group."
+        )
+
+
+# ============================================================
+# ID COMMAND
+# ============================================================
+
+async def id_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if not user or not chat:
+        return
+
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "No username"
+    )
+
+    text = (
+        "🆔 <b>Your Telegram Information</b>\n\n"
+        f"<b>User ID:</b> <code>{user.id}</code>\n"
+        f"<b>Username:</b> {escape(username)}\n\n"
+        f"<b>Chat ID:</b> <code>{chat.id}</code>\n"
+        f"<b>Chat Type:</b> <code>{chat.type}</code>"
+    )
+
+    if chat.title:
+        text += (
+            f"\n<b>Chat Title:</b> "
+            f"{escape(chat.title)}"
+        )
+
+    await update.effective_message.reply_text(
+        text,
         parse_mode="HTML",
     )
 
 
 # ============================================================
-# /STATS
+# STATS COMMAND
 # ============================================================
 
 async def stats_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    message = update.effective_message
-
-    if not message:
+    if not is_admin(update):
+        await update.effective_message.reply_text(
+            "⛔ This command is only available to the bot admin."
+        )
         return
 
-    user = update.effective_user
+    try:
+        database = get_database(context)
+        stats = await database.get_stats()
 
-    if not user:
-        return
-
-    # Only configured bot admins can see statistics.
-    if user.id not in settings.admin_ids:
-
-        await message.reply_text(
-            "❌ អ្នកមិនមានសិទ្ធិប្រើ Command នេះទេ។"
+        text = (
+            "📊 <b>Telegram File Guard Statistics</b>\n\n"
+            f"📁 Total blocked files: "
+            f"<b>{stats['total']}</b>\n"
+            f"✅ Successfully deleted: "
+            f"<b>{stats['successful']}</b>\n"
+            f"❌ Failed to delete: "
+            f"<b>{stats['failed']}</b>\n"
+            f"👥 Protected groups: "
+            f"<b>{stats['groups']}</b>\n"
+            f"👤 Users detected: "
+            f"<b>{stats['users']}</b>\n"
+            f"📅 Blocked today: "
+            f"<b>{stats['today']}</b>"
         )
 
-        return
+        await update.effective_message.reply_text(
+            text,
+            parse_mode="HTML",
+        )
 
-    database: Database = (
-        context.application.bot_data["database"]
-    )
+    except Exception:
+        logger.exception("Failed to get statistics.")
 
-    stats = await database.get_stats()
-
-    await message.reply_text(
-        "📊 <b>Telegram File Guard Statistics</b>\n\n"
-        f"🗑️ Total detected: <b>{stats['total']}</b>\n"
-        f"✅ Deleted: <b>{stats['successful']}</b>\n"
-        f"❌ Failed: <b>{stats['failed']}</b>\n"
-        f"👥 Groups: <b>{stats['groups']}</b>\n"
-        f"👤 Users: <b>{stats['users']}</b>\n"
-        f"📅 Today: <b>{stats['today']}</b>",
-        parse_mode="HTML",
-    )
+        await update.effective_message.reply_text(
+            "❌ Failed to retrieve statistics."
+        )
 
 
 # ============================================================
-# /CLEARSTATS
+# GROUPS COMMAND
+# ============================================================
+
+async def groups_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """
+    Show all groups where the bot is currently active.
+
+    Admin only.
+    """
+
+    if not is_admin(update):
+        await update.effective_message.reply_text(
+            "⛔ This command is only available to the bot admin."
+        )
+        return
+
+    try:
+        database = get_database(context)
+
+        groups = await database.get_groups()
+
+        if not groups:
+            await update.effective_message.reply_text(
+                "📋 <b>Protected Groups</b>\n\n"
+                "No active groups are currently registered.",
+                parse_mode="HTML",
+            )
+            return
+
+        active_groups = []
+        removed_groups = 0
+
+        # Get the bot's own Telegram account
+        bot_user = await context.bot.get_me()
+
+        for group in groups:
+            chat_id = group["chat_id"]
+
+            try:
+                member = await context.bot.get_chat_member(
+                    chat_id=chat_id,
+                    user_id=bot_user.id,
+                )
+
+                # Bot is no longer inside the group
+                if member.status in {
+                    ChatMemberStatus.LEFT,
+                    ChatMemberStatus.BANNED,
+                }:
+                    await database.delete_group(chat_id)
+
+                    removed_groups += 1
+
+                    logger.info(
+                        "Removed inactive group from database: "
+                        "%s (%s)",
+                        group["title"],
+                        chat_id,
+                    )
+
+                    continue
+
+                active_groups.append(group)
+
+            except TelegramError as exc:
+                error_text = str(exc).lower()
+
+                # These errors normally mean the bot cannot access
+                # the group anymore.
+                if (
+                    "chat not found" in error_text
+                    or "kicked" in error_text
+                    or "not a member" in error_text
+                    or "user not found" in error_text
+                ):
+                    await database.delete_group(chat_id)
+
+                    removed_groups += 1
+
+                    logger.info(
+                        "Removed inaccessible group from database: "
+                        "%s (%s)",
+                        group["title"],
+                        chat_id,
+                    )
+
+                    continue
+
+                # For temporary/API errors, don't delete the group.
+                logger.warning(
+                    "Could not verify group %s (%s): %s",
+                    group["title"],
+                    chat_id,
+                    exc,
+                )
+
+                active_groups.append(group)
+
+            except Exception:
+                logger.exception(
+                    "Unexpected error checking group %s",
+                    chat_id,
+                )
+
+                # Don't delete on unknown errors.
+                active_groups.append(group)
+
+        if not active_groups:
+            text = (
+                "📋 <b>Protected Groups</b>\n\n"
+                "No active groups found."
+            )
+
+            if removed_groups:
+                text += (
+                    f"\n\n🧹 Removed "
+                    f"<b>{removed_groups}</b> inactive group(s)."
+                )
+
+            await update.effective_message.reply_text(
+                text,
+                parse_mode="HTML",
+            )
+            return
+
+        lines = [
+            "📋 <b>Protected Groups</b>",
+            "",
+            f"🛡️ Active groups: <b>{len(active_groups)}</b>",
+            "",
+        ]
+
+        for index, group in enumerate(active_groups, start=1):
+            title = escape(
+                group["title"] or "Unknown Group"
+            )
+
+            chat_type = escape(
+                group["chat_type"] or "unknown"
+            )
+
+            username = group["username"]
+
+            if username:
+                username_text = f"@{escape(username)}"
+            else:
+                username_text = "Private group"
+
+            lines.extend(
+                [
+                    f"<b>{index}. {title}</b>",
+                    f"   🆔 <code>{group['chat_id']}</code>",
+                    f"   💬 {username_text}",
+                    f"   📌 Type: <code>{chat_type}</code>",
+                    "",
+                ]
+            )
+
+        if removed_groups:
+            lines.append(
+                f"🧹 Removed "
+                f"<b>{removed_groups}</b> inactive group(s)."
+            )
+
+        await update.effective_message.reply_text(
+            "\n".join(lines),
+            parse_mode="HTML",
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to retrieve protected groups."
+        )
+
+        await update.effective_message.reply_text(
+            "❌ Failed to retrieve protected groups."
+        )
+
+
+# ============================================================
+# CLEAR STATISTICS
 # ============================================================
 
 async def clear_stats_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    message = update.effective_message
-
-    if not message:
-        return
-
-    user = update.effective_user
-
-    if not user:
-        return
-
-    # --------------------------------------------------------
-    # ADMIN ONLY
-    # --------------------------------------------------------
-
-    if user.id not in settings.admin_ids:
-
-        await message.reply_text(
-            "❌ អ្នកមិនមានសិទ្ធិប្រើ Command នេះទេ។"
+    if not is_admin(update):
+        await update.effective_message.reply_text(
+            "⛔ This command is only available to the bot admin."
         )
-
         return
 
-    # --------------------------------------------------------
-    # CONFIRMATION
-    # --------------------------------------------------------
-
-    if not context.args:
-
-        await message.reply_text(
-            "⚠️ <b>Clear Statistics</b>\n\n"
-            "Command នេះនឹងលុប៖\n"
-            "• Total deletion history\n"
-            "• Successful deletions\n"
-            "• Failed deletions\n"
-            "• User deletion history\n"
-            "• Today's statistics\n\n"
-            "✅ Protected groups នឹង <b>មិនត្រូវបានលុប</b> ទេ។\n\n"
-            "ប្រសិនបើអ្នកប្រាកដ សូមវាយ:\n\n"
+    if not context.args or context.args[0].lower() != "confirm":
+        await update.effective_message.reply_text(
+            "⚠️ <b>Warning</b>\n\n"
+            "This will permanently delete all deletion statistics.\n\n"
+            "Your protected groups will NOT be deleted.\n\n"
+            "To continue, use:\n"
             "<code>/clearstats confirm</code>",
             parse_mode="HTML",
         )
-
         return
-
-    # --------------------------------------------------------
-    # VERIFY CONFIRMATION
-    # --------------------------------------------------------
-
-    confirmation = context.args[0].strip().lower()
-
-    if confirmation != "confirm":
-
-        await message.reply_text(
-            "❌ Confirmation មិនត្រឹមត្រូវ។\n\n"
-            "សូមវាយ:\n"
-            "<code>/clearstats confirm</code>",
-            parse_mode="HTML",
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # CLEAR DATABASE
-    # --------------------------------------------------------
-
-    database: Database = (
-        context.application.bot_data["database"]
-    )
 
     try:
+        database = get_database(context)
 
-        deleted_count = (
-            await database.clear_statistics()
-        )
+        deleted_count = await database.clear_statistics()
 
-        await message.reply_text(
-            "✅ <b>Statistics Reset Successfully</b>\n\n"
-            f"🗑️ Records cleared: "
-            f"<b>{deleted_count}</b>\n\n"
-            "📊 Statistics បាន Reset ទៅ 0។\n"
-            "👥 Protected groups នៅតែរក្សាទុកដដែល។",
+        await update.effective_message.reply_text(
+            "🧹 <b>Statistics Cleared</b>\n\n"
+            f"Deleted records: <b>{deleted_count}</b>\n\n"
+            "✅ Protected group tracking was kept.",
             parse_mode="HTML",
         )
 
         logger.warning(
-            "Statistics manually cleared by admin %s. "
-            "Records removed: %s",
-            user.id,
+            "Admin %s cleared statistics. "
+            "%s records removed.",
+            update.effective_user.id,
             deleted_count,
         )
 
     except Exception:
-
         logger.exception(
             "Failed to clear statistics."
         )
 
-        await message.reply_text(
-            "❌ មិនអាច Reset Statistics បានទេ។\n"
-            "សូមពិនិត្យ Database logs។"
+        await update.effective_message.reply_text(
+            "❌ Failed to clear statistics."
         )
 
 
 # ============================================================
-# /HELP
+# HELP COMMAND
 # ============================================================
 
 async def help_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    message = update.effective_message
-
-    if not message:
-        return
-
-    user = update.effective_user
-
-    is_bot_admin = (
-        user is not None
-        and user.id in settings.admin_ids
-    )
+    user_is_admin = is_admin(update)
 
     text = (
-        "🛡️ <b>Telegram File Guard Help</b>\n\n"
-        "/start - Bot information\n"
-        "/help - Help\n\n"
-        "Bot នឹងពិនិត្យ Document ក្នុង Group "
-        "ហើយលុប File ដែលមាន Extension "
-        "ត្រូវបាន Block។"
+        "🛡️ <b>Telegram File Guard</b>\n\n"
+        "I automatically detect and delete blocked "
+        "file types in protected groups.\n\n"
+        "<b>Available commands:</b>\n"
+        "/start - Start the bot\n"
+        "/help - Show this help message\n"
+        "/id - Show your Telegram ID"
     )
 
-    if is_bot_admin:
-
+    if user_is_admin:
         text += (
-            "\n\n"
-            "👑 <b>Admin Commands</b>\n"
-            "/stats - View statistics\n"
+            "\n\n<b>🔐 Admin Commands:</b>\n"
+            "/stats - View deletion statistics\n"
             "/groups - View protected groups\n"
-            "/clearstats - Reset statistics"
+            "/clearstats - Clear deletion statistics"
         )
 
-    await message.reply_text(
+    await update.effective_message.reply_text(
         text,
         parse_mode="HTML",
     )
@@ -339,16 +586,12 @@ async def document_handler(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     message = update.effective_message
-
-    if not message:
-        return
-
     chat = update.effective_chat
 
-    if not chat:
+    if not message or not chat:
         return
 
-    # Only monitor groups and supergroups.
+    # Only protect groups and supergroups
     if chat.type not in {
         ChatType.GROUP,
         ChatType.SUPERGROUP,
@@ -360,99 +603,121 @@ async def document_handler(
     if not filename:
         return
 
-    # Check filename against blocked extensions.
-    if not is_blocked_filename(
-        filename,
-        settings.blocked_extensions,
-    ):
+    # Ignore safe files
+    if not is_blocked_filename(filename):
         return
 
     extension = get_extension(filename)
 
     user = update.effective_user
 
-    user_id = (
-        user.id
-        if user
-        else None
-    )
-
     if user:
-
         username = (
             f"@{user.username}"
             if user.username
-            else user.full_name
+            else user.first_name or "Unknown"
         )
 
+        user_id = user.id
+
     else:
-
         username = "Unknown"
+        user_id = None
 
-    group_title = (
-        chat.title
-        or "Unknown Group"
-    )
-
-    group_username = getattr(
-        chat,
-        "username",
-        None,
-    )
+    group_title = chat.title or "Unknown Group"
+    group_username = chat.username
 
     deleted = False
 
     # --------------------------------------------------------
-    # DELETE BLOCKED FILE
+    # Delete blocked file
     # --------------------------------------------------------
 
     if settings.delete_enabled:
-
         try:
+            result = await message.delete()
 
-            deleted = await message.delete()
+            deleted = bool(result)
 
-            logger.warning(
-                "Deleted blocked file: %s | Group: %s",
+            if deleted:
+                logger.warning(
+                    "Deleted blocked file: %s | "
+                    "Group: %s | Group ID: %s",
+                    filename,
+                    group_title,
+                    chat.id,
+                )
+            else:
+                logger.warning(
+                    "Telegram returned unsuccessful delete "
+                    "result for file: %s | Group: %s",
+                    filename,
+                    group_title,
+                )
+
+        except Exception:
+            logger.exception(
+                "Failed to delete blocked file: %s | "
+                "Group: %s",
                 filename,
                 group_title,
             )
 
-        except Exception:
-
-            logger.exception(
-                "Failed to delete file %s",
-                filename,
-            )
-
-    # --------------------------------------------------------
-    # RECORD EVENT
-    # --------------------------------------------------------
-
-    database: Database = (
-        context.application.bot_data["database"]
-    )
-
-    await database.record_deletion(
-        message_id=message.message_id,
-        chat_id=chat.id,
-        group_title=group_title,
-        group_username=group_username,
-        user_id=user_id,
-        username=user.username if user else None,
-        first_name=user.first_name if user else None,
-        last_name=user.last_name if user else None,
-        file_name=filename,
-        file_extension=extension,
-        reason="Blocked file extension",
-        deleted_successfully=deleted,
-    )
+    else:
+        logger.warning(
+            "Delete disabled. Blocked file detected: %s | "
+            "Group: %s",
+            filename,
+            group_title,
+        )
 
     # --------------------------------------------------------
-    # ADMIN ALERT
+    # Database
+    # --------------------------------------------------------
+
+    try:
+        database = get_database(context)
+
+        # Make sure the group is registered
+        await database.upsert_group(
+            chat_id=chat.id,
+            title=group_title,
+            username=group_username,
+            chat_type=chat.type,
+        )
+
+        await database.record_deletion(
+            message_id=message.message_id,
+            chat_id=chat.id,
+            group_title=group_title,
+            group_username=group_username,
+            user_id=user_id,
+            username=user.username if user else None,
+            first_name=user.first_name if user else None,
+            last_name=user.last_name if user else None,
+            file_name=filename,
+            file_extension=extension,
+            reason="Blocked file extension",
+            deleted_successfully=deleted,
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to record blocked file in database: %s",
+            filename,
+        )
+
+    # --------------------------------------------------------
+    # Admin alert
     # --------------------------------------------------------
 
     if settings.alert_admins:
+        logger.info(
+            "Sending admin security alert for file: %s | "
+            "Deleted: %s",
+            filename,
+            deleted,
+        )
 
         await send_admin_alert(
             context,
@@ -471,21 +736,32 @@ async def document_handler(
 # ============================================================
 
 def register_handlers(application):
-
     # --------------------------------------------------------
-    # FILE SCANNER
+    # Track normal group activity
     # --------------------------------------------------------
 
     application.add_handler(
         MessageHandler(
-            filters.Document.ALL
-            & ~filters.COMMAND,
-            document_handler,
-        )
+            filters.ChatType.GROUPS & ~filters.COMMAND,
+            track_group_activity,
+        ),
+        group=0,
     )
 
     # --------------------------------------------------------
-    # BASIC COMMANDS
+    # Block suspicious documents
+    # --------------------------------------------------------
+
+    application.add_handler(
+        MessageHandler(
+            filters.Document.ALL & ~filters.COMMAND,
+            document_handler,
+        ),
+        group=1,
+    )
+
+    # --------------------------------------------------------
+    # Commands
     # --------------------------------------------------------
 
     application.add_handler(
@@ -502,9 +778,12 @@ def register_handlers(application):
         )
     )
 
-    # --------------------------------------------------------
-    # ADMIN COMMANDS
-    # --------------------------------------------------------
+    application.add_handler(
+        CommandHandler(
+            "id",
+            id_command,
+        )
+    )
 
     application.add_handler(
         CommandHandler(
@@ -515,7 +794,18 @@ def register_handlers(application):
 
     application.add_handler(
         CommandHandler(
+            "groups",
+            groups_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
             "clearstats",
             clear_stats_command,
         )
+    )
+
+    logger.info(
+        "Telegram handlers registered successfully."
     )
